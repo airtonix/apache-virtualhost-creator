@@ -59,437 +59,55 @@ def message(message, level=None):
 
   return "%s%s %s %s" % (START, COLOURS, message, FINISH)
 
-
-"""
-    ------------
-    --- TODO ---
-    ------------
-  COMPONENTS MANIFEST ACTIONS
-  ---------------------------
-    if if an action-section fails, then the component will not be processed.
-  ComponentName
-   | - >  1. action section name  : name of the action group
-    2. actions    : actions to perform (actions with <> are references to functions here.
-      | - > action command [parameter(s)] : action parameters (command is run for each parameter)
-        (each action can also have a third conditional argument to determine if it should execute.
-    3. condition    :  if this equals False, then this action group is skipped.
-
-"""
 PROCESS = {
  "create" : {
 
   "base" : [
-    ["Export Variables",[
-      ["<STORE>"                   , ["SITE_PATH_ROOT", "/var/www/${DOMAIN_FQDN}/"]],
+    ["Storing Variables",[
+      ["<STORE>"                            , ["SITE_PATH_ROOT",          "/var/www/${DOMAIN_FQDN}/"]],
     ]]
+
+    ["Exporting Variables",[
+      ["<EXPORT>"                           , ["VIRTUALHOST_ROOT"         , "${SITE_PATH_ROOT}"] ]
+      ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_USER"   , "${USERNAME}"] ]
+      ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_GROUP"  , "www-data"] ]
+    ]],
+
+    ["Executing Actions",[
+      ["<ACTIONS>"                          , ["base/actions/*"] ],
+    ]],
+
+    ["Process Template Files : base", [
+      ["<PROCESSTEMPLATEFILE>"              , ["config/apache/extra/authentication.conf"]]
+    ]],
+
+    ["Copying Apache Virtualhost Config",[
+      ["cp"                                 , ["config/base/main", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+    ]],
+
+    ["Copying SKEL Template",[
+      ["cp"                                 , ["skel/base/", "${SITE_PATH_ROOT}", "-R"] ],
+    ]],
+
   ],
 
-
   "django" : [
-    ["Install required dependancies",[
-      ["<ENSURE_DEPENDANCIES>"              , ["python-setuptools", "libapache2-mod-wsgi"]],
-    ], "self.variables['django']"],
 
     ["Create the Apache Python CGI", [
-      ["<STORE>"                  , ["DJANGO_WSGI", """import os, sys\nsys.path.insert(0,'/var/www/${DOMAIN_FQDN}') \nos.environ['DJANGO_SETTINGS_MODULE'] = 'project.settings' \nimport django.core.handlers.wsgi \napplication = django.core.handlers.wsgi.WSGIHandler()"""]],
-    ], "self.variables['django']"],
-
-    ["Create the project base files", [
-      ["<STORE>"                  , ["DJANGO_PROJECT_TEMPLATE_BASE", """
-{% load site %}
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
-<html lang="en">
-  <head>
-
-    <title>{% block pageMeta_SiteName %} {% sitename %} {% endblock %} : {% block pageMeta_pageTitle %}Page Title{% endblock %}</title>
-
-    <meta http-equiv="content-type" content="application/xhtml+xml; charset=UTF-8" />
-    <meta name="author" content="{{ page_author }}" />
-    <meta name="description" content="{{ page_description }}" />
-    <meta name="keywords" content="{{ keywords }}" />
-    <meta name="robots" content="index, follow, noarchive" />
-    <meta name="googlebot" content="noarchive" />
-
-    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}js/themes/base/ui.all.css"/>
-    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/screen.css" media="screen" >
-    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/breadcrumbs.css" media="screen" >
-    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/browser.css" media="screen" >
-    {% block stylesheets %} {% endblock %}
-    {% block cssBlock %} {% endblock %}
-    <!--[if IE 6]><link rel="stylesheet" type="text/css" href="/static/css/ie6.css" media="screen" /><![endif]-->
-
-    <script type="text/javascript" src="{{ STATIC_URL }}js/jquery-1.3.2.js"></script>
-    <script type="text/javascript" src="{{ STATIC_URL }}js/ui/jquery-ui-1.7.2.custom.js"></script>
-    {% block scripts %}{% endblock %}
-    <script type="text/javascript">
-    $(function(){
-    })
-    {% block jsBlock %} {% endblock %}
-    </script>
-
-
-  </head>
-  <body class="page-{% block page_class %}base{% endblock %}">
-    <div id="canvas">
-      <div id="header" class="row">
-
-        <div id="site-nav">
-        {% block sitenav %}
-          <ul class="admin">
-            <li>
-              <a href="/">dashboard</a>
-            </li>
-          </ul>
-        {% endblock %}
-        </div>
-
-        <div id="site-name">
-          {% block site_header %}
-          <div class="site-title"> <h1><a href="{%block siteUrl %}siteUrl{%endblock%}">{%block site_title %} {% sitename %} {%endblock%}</a></h1> </div>
-          <div class="site-subtitle"> <i>{% block site_subtitle %}{% endblock %}</i> </div>
-          {% endblock %}
-        </div>
-
-      </div><!-- #header//-->
-
-      <div id="page" class="row">
-        <div id="breadcrumb">
-        {% block breadcrumb %}
-          <span class="crumb"><a href="{% url basic-browser-dashboard %}">root</a> </span>
-        {% endblock %}
-        </div>
-
-      {% block body %}
-
-        {% include search.html %}
-
-        <div id="page-header" class="row">
-          {% block page_header %}
-            <div class="title"> <h1>{% block page_title %}{% endblock %}</h1> </div>
-            <div class="subtitle"> <span>{% block page_subtitle %}{% endblock %}</span> </div>
-          {% endblock %}
-        </div><!-- #page-header//-->
-
-        <div id="page-body" class="row">
-        {% block main_content %}
-        {% endblock %}
-        </div><!-- #page-body//-->
-
-      {% endblock %}
-      </div><!-- #page//-->
-
-      <div id="footer" class="row">
-      {% block footer %}{% endblock %}
-      </div><!-- #footer//-->
-
-    </div>
-  </body>
-</html>
-      """]],
-      ["<STORE>"  , ["DJANGO_PROJECT_TEMPLATE_STYLES","""
-html > body, body{
-	font-family:sans-serif;
-	font-size:62.5%;
-	color:#333;
-	background:#444;
-	padding: 0;
-	margin: 0;
-}
-
-a{
-	color:#EE6002;
-}
-a:hover{
-	color:#E1BB6B;
-}
-
-.row{
-	float:left;
-	display:inline;
-	clear:both;
-	width:100%;
-}
-
-#canvas{
-	margin:0 auto;
-	padding:0;
-}
-
-
-#header{
-	display:inline;
-	float:left;
-	width:100%;
-
-}
-	#site-name{
-	display:inline;
-	float:left;
-	width:20%;
-	border-bottom-left-radius: 1em;
-	-moz-border-radius-bottomleft: 1em;
-
-	background: -moz-linear-gradient(top, #666 0%, #333 100%); /* firefox */
-	background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#666), color-stop(100%,#333)); /* webkit */
-	height:6em;
-}
-	#site-name a{
-
-		text-decoration:none;
-	}
-	#site-name .site-title{
-		display: inline;
-		float: left;
-		padding-top: 1em;
-		width:100%;
-		text-align:center;
-	}
-	#site-name .site-title h1{
-		margin:0 0 0 0;
-		padding:0;
-	}
-	#site-name .site-title a{
-		letter-spacing:-1px;
-	}
-	#site-name .site-subtitle{
-		width:100%;
-		margin:0;
-		text-align:center;
-
-	}
-
-	#site-nav{
-		display:inline;
-		float:left;
-		width:80%;
-
-	background: -moz-linear-gradient(top, #ccc 0%, #999 100%); /* firefox */
-	background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#ccc), color-stop(100%,#999)); /* webkit */
-		border-bottom-right-radius: 1em;
-		-moz-border-radius-bottomright: 1em;
-		height:6em;
-	}
-	#site-nav ul{
-		display:inline;
-		float:left;
-		margin:0 0 0 0;
-		padding:0;
-	}
-	#site-nav li{
-		display:inline;
-		float:left;
-		margin:0 0 0 0;
-		padding:0;
-	}
-	#site-nav li a{
-		display:inline;
-		float:left;
-		margin:0 0 0 0;
-		text-decoration:none;
-		padding: 2.5em 2em;
-	}
-	#site-nav li a:hover{
-		background:#fff;
-		color:#201B16;
-	}
-
-
-#page{
-	background:#fff;
-}
-	#page-header{
-		border-bottom:.5em solid #333;
-	}
-	#page-header .title{
-		display: inline;
-		float: left;
-		padding:0;
-		margin:0;
-		padding:.5em 0 0 1em;
-	}
-	#page-header .title h1{
-		padding:0;
-		margin:0;
-	}
-	#page-header .subtitle{
-		display: inline;
-		float: left;
-		padding:0;
-		margin:0 0 0 1em;
-		width:100%;
-	}
-      """]],
-      ["<STORE>"  , ["DJANGO_PROJECT_TEMPLATE_TAG_SITES","""
-from django import template
-from django.template import Library, Node, resolve_variable
-from django.conf import settings
-
-register = template.Library()
-
-
-class SiteNameNode(Node):
-  def __init__(self, nodelist = None):
-    self.nodelist = nodelist
-
-  def render(self, context = None):
-    return settings.PROJECT_NAME
-
-@register.tag("sitename")
-def sitename(parser=None, token=None):
-  return SiteNameNode()
-
-class SiteUrlNode(Node):
-  def __init__(self, nodelist = None):
-    self.nodelist = nodelist
-
-  def render(self, context = None):
-    return settings.PROJECT_URL
-
-@register.tag("siteurl")
-def siteurl(parser=None, token=None):
-  return SiteUrlNode()
-      """]],
-      ["<STORE>"  , ["DJANGO_PROJECT_UTILS_AUTORENDER","""
-from django.http import HttpResponse, HttpResponseRedirect
-from django.shortcuts import render_to_response
-from django.template import RequestContext
-
-def auto_render(func):
-    def _dec(request, *args, **kwargs):
-
-        if kwargs.get('only_context', False):
-            # return only context dictionary
-            del(kwargs['only_context'])
-            response = func(request, *args, **kwargs)
-            if isinstance(response, HttpResponse) or isinstance(response, HttpResponseRedirect):
-                raise Except("cannot return context dictionary because a HttpResponseRedirect as been found")
-            (template_name, context) = response
-            return context
-
-        if kwargs.get('template_name', False):
-            overriden_template_name = kwargs['template_name']
-            del(kwargs['template_name'])
-        else:
-            overriden_template_name = None
-
-        response = func(request, *args, **kwargs)
-
-        if isinstance(response, HttpResponse) or isinstance(response, HttpResponseRedirect):
-            return response
-        (template_name, context) = response
-        if overriden_template_name:
-            template_name = overriden_template_name
-
-        return render_to_response(template_name, context, context_instance=RequestContext(request))
-    return _dec
-      """]],
-      ["<STORE>"  , ["DJANGO_PROJECT_MAINAPP_URLS","""
-from django.conf.urls.defaults import *
-
-urlpatterns = patterns('',
-    url(r'^/$', 'dashboard', name='${DJANGO_MAIN_APPNAME_SLUG}-dashboard'),
-)
-      """]],
-      ["<STORE>"  , ["DJANGO_PROJECT_MAINAPP_VIEWS","""
-import os, datetime, time
-
-from django.http import HttpResponse
-from django.shortcuts import get_object_or_404, get_list_or_404
-
-from project.utils.autorender import *
-from utils import *
-from forms import *
-
-## LISTS
-@auto_render
-def dashboard(template_name="dashboard.html") :
-  return template_name, { "data" : None }"""]],
-    ], "self.variables['django']"],
+      ["<PROCESSTEMPLATEFILE>"              , ["DJANGO_WSGI",            "django/root/cgi-bin/django.wsgi"]],
+    ], "self.variables['django'] == True"],
 
     ["Create the apache Config Element",[
-      ["<STORE>"  , ["DJANGO_CONFIG","""
- WSGIScriptAlias / ${SITE_PATH_ROOT}cgi-bin/django.wsgi
- Alias /robots.txt ${SITE_PATH_ROOT}public_html/robots.txt
- Alias /favicon.ico ${SITE_PATH_ROOT}public_html/favicon.ico
- Alias /static ${SITE_PATH_ROOT}public_html/static"""]],
+      ["<PROCESSTEMPLATEFILE>"              , ["DJANGO_VHOST_CONFIG",    "django/etc/apache2/sites-available/django"]],
+      ["<PROCESSTEMPLATEFILE>"              , ["DJANGO_SETTINGS_PREFIX", "django/root/project/settings.py.prefix"]],
+      ["<PROCESSTEMPLATEFILE>"              , ["DJANGO_SETTINGS_SUFFIX", "django/root/project/settings.py.suffix"]],
+    ], "self.variables['django'] == True"],
 
-      ["<STORE>"  , ["DJANGO_SETTINGS_PREFIX","""
-import sys, os
-
-sys.path.insert(0,
-  os.path.abspath(
-    os.path.normpath('%s/../' % os.path.dirname(__file__))
-  )
-)
-PROJECT_NAME = "${DOMAIN_FQDN}"
-PROJECT_ROOT = os.path.abspath( os.path.dirname(__file__) )
-PROJECT_URL = "http://${DOMAIN_FQDN}"
-SERVER_ROOT = os.path.abspath( os.path.normpath(os.path.dirname(PROJECT_ROOT) ) )
-INTERNAL_IPS = ('127.0.0.1',)"""]],
-
-      ["<STORE>"  , ["DJANGO_SETTINGS_SUFFIX","""
-DATABASES['default']['ENGINE'] = 'django.db.backends.sqlite3'
-DATABASES['default']['NAME'] = os.path.join(SERVER_ROOT, 'db', 'database.sqlite3')
-TIME_ZONE='Australia/Adelaide'
-LANGUAGE_CODE='en_AU'
-
-MEDIA_ROOT = os.path.join(SERVER_ROOT,'public_html','files')
-MEDIA_URL = '%s/files/' % PROJECT_URL
-
-STATIC_ROOT = os.path.join(SERVER_ROOT,'public_html', 'static')
-STATIC_URL = '%s/static/' % PROJECT_URL
-
-ADMIN_MEDIA_PREFIX = '/static/admin/'
-
-STATICFILES_DIRS = (
-  os.path.join(SERVER_ROOT,'public_html'),
-)
-
-STATICFILES_FINDERS = (
-  'django.contrib.staticfiles.finders.FileSystemFinder',
-  'django.contrib.staticfiles.finders.AppDirectoriesFinder',
-  'django.contrib.staticfiles.finders.DefaultStorageFinder',
-)
-
-TEMPLATE_LOADERS = (
-  'django.template.loaders.filesystem.Loader',
-  'django.template.loaders.app_directories.Loader',
-  'django.template.loaders.eggs.Loader',
-)
-TEMPLATE_DIRS = (
-  os.path.join(PROJECT_ROOT, "templates"),
-  os.path.join(PROJECT_ROOT, "${DJANGO_MAIN_APPNAME}", "templates")
-)
-
-MIDDLEWARE_CLASSES = (
-  'django.middleware.common.CommonMiddleware',
-  'django.contrib.sessions.middleware.SessionMiddleware',
-  'django.middleware.csrf.CsrfViewMiddleware',
-  'django.contrib.auth.middleware.AuthenticationMiddleware',
-  'django.contrib.messages.middleware.MessageMiddleware',
-  'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware',
-)
-
-INSTALLED_APPS = (
-  'django.contrib.auth',
-  'django.contrib.contenttypes',
-  'django.contrib.sessions',
-  'django.contrib.sites',
-  'django.contrib.messages',
-  'django.contrib.staticfiles',
-  'django.contrib.admin',
-  'django.contrib.admindocs',
-  'django.contrib.flatpages',
-  'django.contrib.markup',
-  'south',
-  '${DJANGO_MAIN_APPNAME}',
-)"""]],
-
-    ], "self.variables['django']"],
+    ["Executing Actions",[
+      ["<ACTIONS>"                , ["django/actions/*"] ],
+    ], "self.variables['django'] == True"],
 
     ["Create the Django project : First Stage", [
-      ["mkdir"                  , ["${SITE_PATH_ROOT}","-p"]],
-      ["<DJANGOADMIN>"          , ["startproject", "project"], "${SITE_PATH_ROOT}"],
       ["<IMPROVE_DJANGO>"       , ["${SITE_PATH_ROOT}", "project", "settings.py"]],
 
       # TODO: initial Sync
@@ -498,50 +116,18 @@ INSTALLED_APPS = (
       #["<DJANGOADMIN>"         , ["collectstatic"], "${SITE_PATH_ROOT}"],
       # TODO :start initial migration.
       #["<DJANGOADMIN>"         , ["migrate"], "${SITE_PATH_ROOT}"]
-    ], "self.variables['django']"],
-
-    ["Create the Main Django Application", [
-      ["touch"                  , ["${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/forms.py"]],
-      ["<FILEWRITE>"            , ["${DJANGO_PROJECT_MAINAPP_URLS}", "${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/urls.py"]],
-      ["<FILEWRITE>"            , ["${DJANGO_PROJECT_MAINAPP_VIEWS}", "${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/views.py"]],
-    ], "self.variables['django'] and self.variables['DJANGO_MAIN_APPNAME']"],
+    ], "self.variables['django'] == True"],
 
     ["Create the Django Paths & Files", [
-      ["mkdir"                  , ["${SITE_PATH_ROOT}db","-p"]],
-      ["mkdir"                  , ["${SITE_PATH_ROOT}cgi-bin","-p"]],
-      ["mkdir"                  , ["${SITE_PATH_ROOT}cgi-bin","-p"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}cgi-bin/django.wsgi"]],
 
-      ["mkdir"                  , ["${SITE_PATH_ROOT}logs/django","-p"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}logs/django/errors.log"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}logs/django/debug.log"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}logs/django/access.log"]],
-
-      ["mkdir"                  , ["${SITE_PATH_ROOT}public_html/static/js","-p"]],
-      ["mkdir"                  , ["${SITE_PATH_ROOT}public_html/static/css","-p"]],
-      ["mkdir"                  , ["${SITE_PATH_ROOT}public_html/static/img","-p"]],
-      ["mkdir"                  , ["${SITE_PATH_ROOT}public_html/files","-p"]],
-
-      ["mkdir"                  , ["${SITE_PATH_ROOT}project/utils","-p"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}project/utils/__init__.py"]],
       ["<FILEWRITE>"            , ["${DJANGO_PROJECT_UTILS_AUTORENDER}", "${SITE_PATH_ROOT}project/utils/autorender.py"]],
-
-      ["mkdir"                  , ["${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/templatetags","-p"]],
-      ["touch"                  , ["${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/templatetags/__init__.py"]],
       ["<FILEWRITE>"            , ["${DJANGO_PROJECT_TEMPLATE_TAG_SITES}", "${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/templatetags/site.py"]],
 
-      ["mkdir"                  , ["${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/templates","-p"]],
       ["<FILEWRITE>"            , ["${DJANGO_PROJECT_TEMPLATE_BASE}", "${SITE_PATH_ROOT}project/${DJANGO_MAIN_APPNAME}/templates/base.html"]],
-
       ["<FILEWRITE>"            , ["${DJANGO_PROJECT_TEMPLATE_STYLES}", "${SITE_PATH_ROOT}public_html/static/css/screen.css"]],
 
       ["<FILEWRITE>"            , ["${DJANGO_WSGI}", "${SITE_PATH_ROOT}cgi-bin/django.wsgi"]],
-    ], "self.variables['django']"],
-
-    ["Create the Sqlite Database", [
-      ["touch"                  , ["${SITE_PATH_ROOT}db/database.sqlite3"]],
-      ["chmod"                  , ["777","${SITE_PATH_ROOT}db/database.sqlite3"]],
-    ], "self.variables['django']"],
+    ], "self.variables['django'] == True"],
 
 
   ],
@@ -551,11 +137,11 @@ INSTALLED_APPS = (
     ["Avahi Daemon", [
       ["avahi-add-aliases"                , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
       ["avahi-publish-aliases"],
-    ],"self.variables['isAvahi'] == True"],
+    ],"self.variables['usesAvahi'] == True"],
 
     ["Bind9 Server", [
       ["<INSERTDNSRECORD>"                , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}", "${SERVERIP}"]],
-    ],"self.variables['isAvahi'] == True"],
+    ],"self.variables['usesDNS'] == True"],
   ],
 
 
@@ -564,69 +150,22 @@ INSTALLED_APPS = (
       ["<ENSURE_DEPENDANCIES>"    , ["apache2"]],
     ]],
 
-    ["Create Directories",[
-      ["mkdir"                    , ["${SITE_PATH_ROOT}","-p"]],
-      ["mkdir"                    , ["${SITE_PATH_ROOT}logs","-p"]],
-      ["mkdir"                    , ["${SITE_PATH_ROOT}public_html","-p"]],
-    ]],
-
-    ["Create some convience files",[
-      ["touch"                    , ["${SITE_PATH_ROOT}public_html/favicon.ico"]],
-      ["touch"                    , ["${SITE_PATH_ROOT}public_html/favicon.png"]],
-    ]],
-
-    ["Setup Log Files", [
-      ["touch"                    , ["${SITE_PATH_ROOT}logs/errors.log"]],
-      ["touch"                    , ["${SITE_PATH_ROOT}logs/access.log"]],
+    ["Executing Actions",[
+      ["<ACTIONS>"                , ["actions/apache/*"] ],
     ]],
 
     ["Apache Default Authentication", [
-      ["<STORE>"                  , ["APACHE_AUTHENTICATION_FRAGMENT","""
-<Directory /var/www/${DOMAIN_FQDN}/public_html/>
- Options Indexes FollowSymLinks MultiViews
- AllowOverride All
- Order allow,deny
- allow from all
-</Directory>"""]]
+      ["<PROCESSTEMPLATEFILE>"                  , ["APACHE_AUTHENTICATION_FRAGMENT","config/apache/extra/restrictions.conf"]]
     ],"self.variables['isLdap']==False"],
 
     ["Apache-Ldap Directory Based Authentication", [
-      ["<STORE>"                  , ["APACHE_AUTHENTICATION_FRAGMENT", """
-<Directory /var/www/${DOMAIN_FQDN}/public_html/>
- Options Indexes FollowSymLinks MultiViews
- Order allow,deny
- allow from all
-</Directory>
-<Location / >
- AuthBasicProvider ldap
- AuthLDAPURL "ldap://localhost:389/${LDAP_BASE}?uid"
- AuthLDAPBindDN "cn=admin,dc=${HOSTNAME},dc=${DOMAIN}"
- AuthLDAPBindPassword "${LDAP_ADMIN_PASSWORD}"
- AuthType basic
- AuthName "Please provide valid crednetials for : ${DOMAIN_FQDN}"
- ${LDAP_REQUIRE_MODE}
- # TODO: Require ldap-attribute active=true
-</Location>"""]]
+      ["<PROCESSTEMPLATEFILE>"                  , ["APACHE_AUTHENTICATION_FRAGMENT", "ldap/etc/apache2/sites-available/extra/ldap.conf"]]
     ],"self.variables['isLdap']==True"],
 
     ["Apache Vhost Definition File", [
 
       ["touch"                      , ["/etc/apache2/sites-available/${DOMAIN_FQDN}"]],
-      ["<STORE>"                    , ["APACHE_VHOST_CONF", """
-<VirtualHost *:80>
- ServerAdmin ${ADMIN_EMAIL}
- ServerName ${DOMAIN_FQDN}
- DocumentRoot /var/www/${DOMAIN_FQDN}/public_html
-
- ${APACHE_AUTHENTICATION_FRAGMENT}
-
- ${DJANGO_CONFIG}
-
- LogFormat "'time'='%t', 'user'='%u', 'client-ip'='%a', 'server-ip'='%A', 'server-name'='%v', 'url'='%U', 'status'='%>s'" authentications
- ErrorLog /var/www/${DOMAIN_FQDN}/logs/errors.log
- CustomLog /var/www/${DOMAIN_FQDN}/logs/access.log combined
- CustomLog /var/www/${DOMAIN_FQDN}/logs/authentications.log authentications
-</VirtualHost>"""]],
+      ["<STORE>"                    , ["APACHE_VHOST_CONF", "base/"]],
       ["<FILEWRITE>"               , ["${APACHE_VHOST_CONF}", "/etc/apache2/sites-available/${DOMAIN_FQDN}"]],
       ["chown"                     , ["${ADMINUSER}:www-data", "${SITE_PATH_ROOT}", "-R"]],
       ["a2ensite"                  , ["${DOMAIN_FQDN}"]],
@@ -927,7 +466,7 @@ class vhostCreator:
     record = '{0} {1:>10} {2:>15}'.format(name, "A", ip_address)
     bind_file.write( record )
     bind_file.close()
-    
+
   def improve_django_settings(self, path):
     settings_file = ""
     try :

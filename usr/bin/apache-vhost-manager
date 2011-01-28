@@ -1,0 +1,585 @@
+#!/usr/bin/env python
+import sys
+import subprocess
+import re
+import os
+import pwd
+import getpass
+import shutil
+import tempfile
+import string
+import array
+import struct
+import socket
+import fcntl
+import socket
+import platform
+from optparse import OptionParser
+
+
+def message(message, level=None):
+  START='\033['
+  FINISH='\033[0m'
+
+  BOLD='1;'
+
+  BLACK="30"
+  RED="31"
+  GREEN="32"
+  YELLOW="33"
+  BLUE="34"
+  MAGENTA="35"
+  CYAN="36"
+  GREY="37"
+
+  BGBLACK="40"
+  BGRED="41"
+  BGGREEN="42"
+  BGYELLOW="43"
+  BGBLUE="44"
+  BGMAGENTA="45"
+  BGCYAN="46"
+  BGGREY="47"
+
+  if level == "header" :
+    COLOURS="%s;%sm" % (GREY, BGBLUE)
+  if level == "error" :
+    COLOURS="%s;%sm" % (GREY, BGRED)
+  elif level == "warning" :
+    COLOURS="%s;%sm" % (BLACK,BGYELLOW)
+  elif level == "debug" :
+    COLOURS="%sm" % YELLOW
+  elif level == "result" :
+    COLOURS="%sm" % CYAN
+  elif level == "success" :
+    COLOURS="%sm" % GREEN
+  elif level == "choice" :
+    COLOURS="%sm" % BLUE
+  else :
+    COLOURS="%sm" % GREY
+
+  return "%s%s %s %s" % (START, COLOURS, message, FINISH)
+
+PROCESS = {
+ "create" : {
+
+  "base" : [
+    ["Storing Variables",[
+      ["<EXPORT>"                           , ["SITE_PATH_ROOT",          "/var/www/${DOMAIN_FQDN}/"]],
+    ]]
+
+    ["Exporting Variables",[
+      ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_USER"   , os.environ["USER"] ] ]
+      ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_GROUP"  , "www-data"] ]
+    ]],
+
+    ["Executing Actions",[
+      ["<ACTIONS>"                          , ["base/actions/*"] ],
+    ]],
+
+    ["Process Template Files : base", [
+      ["<PROCESSTEMPLATEFILE>"              , ["config/apache/extra/authentication.conf"]]
+    ]],
+
+    ["Copying Apache Virtualhost Config",[
+      ["cp"                                 , ["config/base/main", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+    ]],
+
+    ["Copying SKEL Template",[
+      ["cp"                                 , ["skel/base/", "${SITE_PATH_ROOT}", "-R"] ],
+    ]],
+
+  ],
+
+ },
+
+
+ "remove" : {
+
+    "base"  : [
+    ],
+
+    "django" : [
+    ],
+
+    "ldap"  : [
+    ],
+
+    "dns" : [
+      ["Avahi CNAME Alias", [
+        ["avahi-remove-aliases"       , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
+      ],"self.variables['isAvahi'] == True"],
+    ],
+
+    "apache" : [
+      ["Remove Apache Config", [
+        ["a2dissite"                  , ["${DOMAIN_FQDN}" ]],
+        ["rm"                         , ["/var/www/${DOMAIN_FQDN}", "-rf"]],
+        ["rm"                         , ["/etc/apache2/sites-available/${DOMAIN_FQDN}"]],
+      ]],
+    ],
+    }
+}
+
+
+class vhostCreator:
+  """ Class doc """
+
+  def __init__ (self, args):
+    """ Class initialiser """
+    self.required_components = ["base","apache"]
+    self.debug = True
+    self.testrun = args.isTestRun
+
+    self.variables = {
+      "MODE" : "create" if not args.remove else "remove",
+    }
+
+    self.conf_path = os.path.join("..","..","etc","apache-vhost-manager")
+    self.temporary_workspace = tempfile.mkdtemp()
+    shutil.copytree( os.path.join( self.conf_path, "skel" ), os.path.join( self.temporary_workspace, "skel" ) )
+    shutil.copytree( os.path.join( self.conf_path, "conf" ), os.path.join( self.temporary_workspace, "conf" ) )
+
+
+    self.variables["APPNAME"] = "Apache2 Virtual Host Creator"
+    self.variables["APP_HEADER"] = self.process_template("${APPNAME}\ncreates apache virtual host subdomains for current machine.\nUbuntu 9.10, 10.04")
+    self.variables["USERNAME"] = os.getenv("USER")
+    self.variables["ADMINUSER"] = args.admin_user
+
+    self.variables["usesAvahi"] = args.usesAvahi
+
+    self.variables["HOSTNAME"] = args.hostname if args.hostname else self.popen_pipe("hostname").strip("\n")
+    self.variables["DOMAIN"] = args.domain
+    self.variables["SUBDOMAIN_NAME"] = args.subdomain
+    self.variables["DOMAIN_FQDN"] = "%s.%s" % (self.variables["HOSTNAME"], args.domain)
+
+    if args.subdomain :
+      self.variables["DOMAIN_FQDN"] = "%s.%s" % (args.subdomain, self.variables["DOMAIN_FQDN"])
+
+    self.variables["SERVERIP"] = args.server_ip if args.server_ip else "127.0.0.1"
+    self.variables["BINDFILE"] = args.zone_file if args.zone_file else "/etc/bind/zones/home.db"
+
+    self.variables["ADMIN_EMAIL"] = self.process_template(args.admin_email)
+    self.variables["SITE_PATH_ROOT"] = None
+
+    if args.isDjango :
+      django = {}
+      django["HANDLES_LDAP"] = args.djangoHandlesLDAP
+      django["CONFIG"] = ""
+      django["CGI"] = ""
+      self.variables["DJANGO_MAIN_APPNAME"] = args.djangoMainAppName if args.djangoMainAppName else "site_portal"
+      self.variables["DJANGO_MAIN_APPNAME_SLUG"] = string.replace(args.djangoMainAppName, "_", "-")
+
+      self.variables["django"] = django
+
+
+    self.variables["isLdap"] = args.isLdap
+    self.variables["LDAP_URL"] = self.process_template(args.ldap_url)
+    self.variables["LDAP_BASE"] = self.process_template(args.ldap_base)
+    self.variables["LDAP_ADMIN"] = self.process_template(args.ldap_admin)
+    self.variables["LDAP_ADMIN_PASSWORD"] = args.ldap_admin_password
+
+    self.variables["LDAP_ALLOW_GROUPS"] = self.process_template(args.ldap_allow_groups)
+    self.variables["LDAP_ALLOW_USERS"] = self.process_template(args.ldap_allow_users)
+
+    if args.isLdap:
+      self.required_components.insert(1,"ldap")
+
+      if args.ldap_allow_groups :
+        groups = []
+        for group in self.process_template(args.ldap_allow_groups).split(";") :
+          groups.append(" Require ldap-group %s" % group)
+        self.variables["LDAP_REQUIRE_MODE"] = "\n ".join(groups)
+
+      if args.ldap_allow_users :
+        users = []
+        for user in self.process_template(args.ldap_allow_users).split(";") :
+          groups.append(" Require ldap-user %s" % user)
+        self.variables["LDAP_REQUIRE_MODE"] = "\n ".join(users)
+
+      if not args.ldap_allow_users and not args.ldap_allow_groups :
+        self.variables["LDAP_REQUIRE_MODE"] = "Require valid-user"
+
+    else:
+      self.variables["LDAP_REQUIRE_MODE"]=""
+
+    print ( message(self.variables["APP_HEADER"],"header") )
+
+    if args.isDjango :
+      self.required_components.insert(1,"django")
+
+    if args.isAvahi :
+      self.required_components.insert(1,"dns")
+
+
+  def cleanup(self):
+    self.logger( message("Cleaning up" % component, "header") )
+    os.rmdir( self.temporary_workspace )
+
+  def run (self):
+    """ Function doc """
+    process = PROCESS[self.variables["MODE"]]
+    for component in self.required_components :
+      self.logger( message("Processing Component : %s" % component, "header") )
+
+      component = process[component]
+      for step in component:
+
+        label = step[0]
+        actions = step[1]
+        condition = True
+
+        if len(step) > 2 :
+          condition = eval(step[2])
+
+        if not condition :
+          continue
+        else:
+          self.logger( message("\t>>> %s " % label, "warning") )
+
+        for command in actions :
+          arg_elms = []
+
+          try :
+            for elm in command[1] :
+              arg_elms.append( self.process_template( elm ) )
+          except:
+            pass
+
+          if command[0] == "<STORE>" :
+            self.logger( "Storing %s " % arg_elms[0] )
+            self.variables[ arg_elms[0] ] = arg_elms[1]
+
+          elif command[0] == "<EXPORT>" :
+            self.logger( "Exporting %s " % arg_elms[0] )
+            os.environ[arg_elms[0]] = arg_elms[1]
+
+          elif command[0] == "<FILEWRITE>" :
+            self.dump_to_file(arg_elms[1], arg_elms[0])
+
+          elif command[0] == "<PROCESSTEMPLATEFILE>" :
+            template_path = os.path.join(self.temporary_workspace, arg_elms[0])
+            self.logger( "Template File [Searching] \n %s " % arg_elms[0] )
+            if os.path.exists( template_path ) :
+              template_file = open( template_path, "r" )
+              template = template_file.read()
+              template_file.close()
+
+              self.logger( "Template File [Processing] \n %s " % arg_elms[0] )
+              processed_template = self.process_template( template_file.read() )
+
+              template_file = open( template_path, "w" )
+              template_file.write(processed_template)
+              template_file.close()
+            else:
+              self.logger( "Template File [Not Found] \n %s " % arg_elms[0] )
+
+          elif command[0] == "<INSERTDNSRECORD>" :
+            self.insert_bind_record(name = command[1][0], ip_address=command[1][1])
+
+          elif command[0] == "<IMPROVE_DJANGO>" :
+            path = os.path.join( *self.process_template( command[1] ) )
+            self.logger( message("waiting for django settings file to exist.", "warning") )
+            if not self.testrun :
+              while not ( os.path.exists(path) ) :
+                pass
+              self.improve_django_settings( path )
+
+          else :
+            self.execute("%s %s" % (command[0]," ".join(arg_elms) ) )
+    self.cleanup()
+
+  def logger (self,*msg):
+    """ logs messages to the console """
+    if self.debug :
+
+      print( "%s%s" % (message("[ %s ]" % self.variables["APPNAME"])," ".join(msg) ) )
+
+  def process_template(self, source) :
+    """ Function doc """
+
+    if isinstance(source, str) :
+      output = self._process_template(source)
+
+    else :
+      output = []
+      for item in source :
+        output.append( self._process_template( item ) )
+
+    return output
+
+  def _process_template(self, source) :
+    if re.search('\$\{([a-zA-Z0-9_]+)\}', source)!=None :
+      return string.Template( source ).safe_substitute(self.variables)
+    else :
+      return source
+
+  def ensure_dir(self, path) :
+    """
+      Looks for a folder at provided path, creates it if it does not exist.
+      Returns the folder.
+    """
+    folder = os.path.exists(path)
+    if not folder:
+      if not self.testrun :
+        folder = os.makedirs(path)
+      self.logger("ensuring folder : %s " % path)
+    self.logger( message("folder ensured : %s " % path, "success") )
+    return folder
+
+  def ensure_file (self, path):
+    """
+      Looks for  file at provided path, creates it if it does not exist.
+      Returns the file.
+    """
+    file = os.path.exists(path) and os.path.isfile(path)
+    if not file :
+      # test for parent folder
+      if not os.path.exists(os.path.split(path)[0]) :
+        self.ensure_dir(os.path.split(path)[0])
+      if not self.testrun :
+        file = open(path,"w");
+      self.logger("ensuring file : %s " % path)
+
+    self.logger( message("file ensured : %s " % path,"success") )
+    return file
+
+  def get_ip_address(self,ifname):
+    SIOCGIFADDR = 0x8915
+    SIOCGIFCONF = 0x8912  #define SIOCGIFCONF
+    MAXBYTES = 8096
+    BYTES = 4096          # Simply define the byte size
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try :
+      ip = socket.inet_ntoa(fcntl.ioctl(
+        s.fileno(),
+        SIOCGIFADDR,  #
+        struct.pack('256s', ifname[:15])
+      )[20:24])
+    except :
+      print("Can't sniff %s" % ifname)
+      ip = None
+    return ip
+
+  def popen_pipe(self, cmd) :
+    self.logger("PopenPipe: %s" % cmd)
+    result = ""
+    if not self.testrun :
+      result = subprocess.Popen(cmd, stdout=subprocess.PIPE).communicate()[0]
+    return result
+
+  def popen(self, cmd, current_working_directory=None) :
+    self.logger("Popen : %s" % cmd)
+    if not self.testrun :
+      subprocess.Popen(cmd,cwd=current_working_directory)
+
+  def execute(self, args):
+    self.logger("Executing : %s" % args)
+    if not self.testrun :
+      os.system(args)
+
+  def dump_to_file (self,filepath, contents):
+    """ Function doc """
+    self.logger("Dumping contents to file : %s" % filepath)
+    self.ensure_file(filepath)
+    if not self.testrun :
+      _file = open(filepath,"w")
+      _file.write(contents)
+      _file.close()
+
+  def insert_bind_record(self, name, ip_address):
+    # open zone file
+    bind_file = open(self.variables["BINDFILE"], "a")
+    record = '{0} {1:>10} {2:>15}'.format(name, "A", ip_address)
+    bind_file.write( record )
+    bind_file.close()
+
+  def improve_django_settings(self, path):
+    settings_file = ""
+    try :
+      self.logger( message("Improving Django Settings File \n\t > %s" % path) )
+
+      self.logger( message(" + reading....") )
+      if not self.testrun :
+        try :
+          file = open(path, "r")
+          settings_file = file.readlines()
+
+          self.logger( message(" + making a backup") )
+          try :
+            backup = open("%s.original" % path, "w")
+            backup.writelines( settings_file )
+            backup.close()
+          except IOError as (errno, strerror):
+            self.logger( message( "I/O error({0}): {1}".format(errno, strerror) , "error") )
+            raise IOError
+          except ValueError:
+            self.logger( message( "Could not convert data." , "error") )
+            raise ValueError
+
+          file.close()
+        except IOError as (errno, strerror):
+          self.logger( message( "I/O error({0}): {1}".format(errno, strerror) , "error") )
+          raise IOError
+        except ValueError:
+          self.logger( message( "Could not convert data." , "error") )
+          raise ValueError
+
+
+      improvements =[
+        self.process_template( self.variables["DJANGO_SETTINGS_PREFIX"] ),
+        "".join(settings_file),
+        self.variables["DJANGO_SETTINGS_SUFFIX"],
+      ]
+
+      self.logger( message(" + writing improvements" ) )
+
+
+      if not self.testrun :
+        try :
+          output_file = open(path, "w")
+          output_file.write( str("\n".join( improvements ) ) )
+          output_file.close()
+
+        except IOError as (errno, strerror):
+          self.logger( message( "I/O error({0}): {1}".format(errno, strerror) , "error") )
+          raise IOError
+        except ValueError:
+          self.logger( message( "Could not convert data." , "error") )
+          raise ValueError
+
+      self.logger( message( "Finished improving the Django Settings File" , "success") )
+
+    except:
+      self.logger( message( "Improvements failed." , "error") )
+
+
+
+if __name__ == "__main__" :
+
+    parser = OptionParser()
+
+
+    parser.add_option("--remove",
+      dest="remove",
+      action="store_true",
+      default=False,
+      help="remove this virtualhost")
+
+    parser.add_option("--test",
+      dest="isTestRun",
+      action="store_true",
+      default=False,
+      help="Dry Test Run.")
+
+
+    parser.add_option("--subdomain",
+      dest="subdomain",
+      action="store",
+      help="name of the vhost subdomain")
+    parser.add_option("--hostname",
+      dest="hostname",
+      action="store",
+      help="name of the vhost subdomain")
+    parser.add_option("--domain",
+      dest="domain",
+      action="store",
+      help="name of the vhost subdomain")
+
+    parser.add_option("--server-ip",
+      dest="server_ip",
+      action="store",
+      help="ip address of the apache server")
+    parser.add_option("--zone-file",
+      dest="zone_file",
+      action="store",
+      default="/etc/bind/zones/home.db",
+      help="bind zone file")
+
+    parser.add_option("--email",
+      dest="admin_email",
+      action="store",
+      default="${USERNAME}@localhost",
+      help="email address of the site admin")
+    parser.add_option("--admin-user",
+      dest="admin_user",
+      action="store",
+      default="www-data",
+      help="username to chown the site-root with")
+
+    parser.add_option("--no-avahi",
+      dest="isAvahi",
+      action="store_false",
+      default=True,
+      help="virtualhost will create avahi aliases, otherwise you create your own dns entries")
+
+    parser.add_option("--ldap",
+      dest="isLdap",
+      action="store_true",
+      default=False,
+      help="Virtualhost will be a use and ldap server for authentication")
+    parser.add_option("--ldap-url",
+      dest="ldap_url",
+      action="store",
+      default="ldap://ldap.${HOSTNAME}.${AVAHI_DOMAIN}:389",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-admin",
+      dest="ldap_admin",
+      action="store",
+      default="cn=admin,dc=${HOSTNAME},dc=${AVAHI_DOMAIN}",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-admin-password",
+      dest="ldap_admin_password",
+      action="store",
+      default="password",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-base",
+      dest="ldap_base",
+      action="store",
+      default="dc=${HOSTNAME},dc=${AVAHI_DOMAIN}",
+      help="Distinguished Name (DN) of the search base to look for Organisational Units, remember that if we are requiring a group that this DN must be above both the user tree and the group tree.")
+    parser.add_option("--ldap-allow-groups",
+      dest="ldap_allow_groups",
+      action="store",
+      default="",
+      help="semicolon separated Distinguished Name (DN) of the groups allowed to access this resource"),
+    parser.add_option("--ldap-allow-users",
+      dest="ldap_allow_users",
+      action="store",
+      default="",
+      help="semicolon separated UIDs of users allowed to access this resource")
+
+    parser.add_option("--django",
+      dest="isDjango",
+      action="store_true",
+      default=False,
+      help="virtualhost will be a django application")
+    parser.add_option("--django-ldap",
+      dest="djangoHandlesLDAP",
+      action="store_true",
+      default=False,
+      help="Ldap Authentication will be handled by the django backend instead of apache.")
+    parser.add_option("--django-main-app",
+      dest="djangoMainAppName",
+      action="store",
+      default="site_portal",
+      help="Allows you to define the name of the main (or first) Django Application.")
+
+
+    (options,args) = parser.parse_args()
+
+    arg_error = False
+
+
+    if not options.remove and options.admin_email == None :
+      print("Need an email address")
+      arg_error = True
+
+    if arg_error == True :
+      parser.print_help()
+      exit(-1)
+    else :
+      vhost = vhostCreator(options)
+      vhost.run()
+

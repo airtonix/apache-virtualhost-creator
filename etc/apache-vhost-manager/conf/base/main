@@ -1,0 +1,15 @@
+<VirtualHost *:80>
+ ServerAdmin ${ADMIN_EMAIL}
+ ServerName ${DOMAIN_FQDN}
+
+ DocumentRoot /var/www/${DOMAIN_FQDN}/public_html
+
+ Include /etc/apache2/sites-enabled/${DOMAIN_FQDN}.d/*.conf
+
+ LogFormat "'time'='%t', 'user'='%u', 'client-ip'='%a', 'server-ip'='%A', 'server-name'='%v', 'url'='%U', 'status'='%>s'" authentications
+
+ ErrorLog /var/www/${DOMAIN_FQDN}/logs/errors.log
+ CustomLog /var/www/${DOMAIN_FQDN}/logs/access.log combined
+ CustomLog /var/www/${DOMAIN_FQDN}/logs/authentications.log authentications
+</VirtualHost>
+

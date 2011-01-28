@@ -1,0 +1,90 @@
+{% load site %}
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html lang="en">
+  <head>
+
+    <title>{% block pageMeta_SiteName %} {% sitename %} {% endblock %} : {% block pageMeta_pageTitle %}Page Title{% endblock %}</title>
+
+    <meta http-equiv="content-type" content="application/xhtml+xml; charset=UTF-8" />
+    <meta name="author" content="{{ page_author }}" />
+    <meta name="description" content="{{ page_description }}" />
+    <meta name="keywords" content="{{ keywords }}" />
+    <meta name="robots" content="index, follow, noarchive" />
+    <meta name="googlebot" content="noarchive" />
+
+    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}js/themes/base/ui.all.css"/>
+    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/screen.css" media="screen" >
+    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/breadcrumbs.css" media="screen" >
+    <link rel="stylesheet" type="text/css" href="{{ STATIC_URL }}css/browser.css" media="screen" >
+    {% block stylesheets %} {% endblock %}
+    {% block cssBlock %} {% endblock %}
+    <!--[if IE 6]><link rel="stylesheet" type="text/css" href="/static/css/ie6.css" media="screen" /><![endif]-->
+
+    <script type="text/javascript" src="{{ STATIC_URL }}js/jquery-1.3.2.js"></script>
+    <script type="text/javascript" src="{{ STATIC_URL }}js/ui/jquery-ui-1.7.2.custom.js"></script>
+    {% block scripts %}{% endblock %}
+    <script type="text/javascript">
+    $(function(){
+    })
+    {% block jsBlock %} {% endblock %}
+    </script>
+
+
+  </head>
+  <body class="page-{% block page_class %}base{% endblock %}">
+    <div id="canvas">
+      <div id="header" class="row">
+
+        <div id="site-nav">
+        {% block sitenav %}
+          <ul class="admin">
+            <li>
+              <a href="/">dashboard</a>
+            </li>
+          </ul>
+        {% endblock %}
+        </div>
+
+        <div id="site-name">
+          {% block site_header %}
+          <div class="site-title"> <h1><a href="{%block siteUrl %}siteUrl{%endblock%}">{%block site_title %} {% sitename %} {%endblock%}</a></h1> </div>
+          <div class="site-subtitle"> <i>{% block site_subtitle %}{% endblock %}</i> </div>
+          {% endblock %}
+        </div>
+
+      </div><!-- #header//-->
+
+      <div id="page" class="row">
+        <div id="breadcrumb">
+        {% block breadcrumb %}
+          <span class="crumb"><a href="{% url basic-browser-dashboard %}">root</a> </span>
+        {% endblock %}
+        </div>
+
+      {% block body %}
+
+        {% include search.html %}
+
+        <div id="page-header" class="row">
+          {% block page_header %}
+            <div class="title"> <h1>{% block page_title %}{% endblock %}</h1> </div>
+            <div class="subtitle"> <span>{% block page_subtitle %}{% endblock %}</span> </div>
+          {% endblock %}
+        </div><!-- #page-header//-->
+
+        <div id="page-body" class="row">
+        {% block main_content %}
+        {% endblock %}
+        </div><!-- #page-body//-->
+
+      {% endblock %}
+      </div><!-- #page//-->
+
+      <div id="footer" class="row">
+      {% block footer %}{% endblock %}
+      </div><!-- #footer//-->
+
+    </div>
+  </body>
+</html>
+

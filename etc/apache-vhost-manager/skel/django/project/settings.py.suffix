@@ -1,0 +1,58 @@
+
+DATABASES['default']['ENGINE'] = 'django.db.backends.sqlite3'
+DATABASES['default']['NAME'] = os.path.join(SERVER_ROOT, 'db', 'database.sqlite3')
+TIME_ZONE='Australia/Adelaide'
+LANGUAGE_CODE='en_AU'
+
+MEDIA_ROOT = os.path.join(SERVER_ROOT,'public_html','files')
+MEDIA_URL = '%s/files/' % PROJECT_URL
+
+STATIC_ROOT = os.path.join(SERVER_ROOT,'public_html', 'static')
+STATIC_URL = '%s/static/' % PROJECT_URL
+
+ADMIN_MEDIA_PREFIX = '/static/admin/'
+
+STATICFILES_DIRS = (
+  os.path.join(SERVER_ROOT,'public_html'),
+)
+
+STATICFILES_FINDERS = (
+  'django.contrib.staticfiles.finders.FileSystemFinder',
+  'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+  'django.contrib.staticfiles.finders.DefaultStorageFinder',
+)
+
+TEMPLATE_LOADERS = (
+  'django.template.loaders.filesystem.Loader',
+  'django.template.loaders.app_directories.Loader',
+  'django.template.loaders.eggs.Loader',
+)
+TEMPLATE_DIRS = (
+  os.path.join(PROJECT_ROOT, "templates"),
+  os.path.join(PROJECT_ROOT, "${DJANGO_MAIN_APPNAME}", "templates")
+)
+
+MIDDLEWARE_CLASSES = (
+  'django.middleware.common.CommonMiddleware',
+  'django.contrib.sessions.middleware.SessionMiddleware',
+  'django.middleware.csrf.CsrfViewMiddleware',
+  'django.contrib.auth.middleware.AuthenticationMiddleware',
+  'django.contrib.messages.middleware.MessageMiddleware',
+  'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware',
+)
+
+INSTALLED_APPS = (
+  'django.contrib.auth',
+  'django.contrib.contenttypes',
+  'django.contrib.sessions',
+  'django.contrib.sites',
+  'django.contrib.messages',
+  'django.contrib.staticfiles',
+  'django.contrib.admin',
+  'django.contrib.admindocs',
+  'django.contrib.flatpages',
+  'django.contrib.markup',
+  'south',
+  '${DJANGO_MAIN_APPNAME}',
+)
+

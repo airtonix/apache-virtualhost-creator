@@ -1,0 +1,13 @@
+import sys, os
+
+sys.path.insert(0,
+  os.path.abspath(
+    os.path.normpath('%s/../' % os.path.dirname(__file__))
+  )
+)
+PROJECT_NAME = "${DOMAIN_FQDN}"
+PROJECT_ROOT = os.path.abspath( os.path.dirname(__file__) )
+PROJECT_URL = "http://${DOMAIN_FQDN}"
+SERVER_ROOT = os.path.abspath( os.path.normpath(os.path.dirname(PROJECT_ROOT) ) )
+INTERNAL_IPS = ('127.0.0.1',)
+
