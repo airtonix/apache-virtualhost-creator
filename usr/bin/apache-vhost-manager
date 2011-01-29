@@ -81,12 +81,13 @@ PROCESS = {
     ["Base : Process Template Files" , [
       ["<PROCESSTEMPLATEFILE>"              , [
           "conf/base/main",
+          "conf/base/extra/",
         ]],
     ]],
 
     ["Base : Copying Apache Virtualhost Config" , [
       ["cp"                                 , ["${TMP_WORKSPACE_ROOT}/conf/base/main", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
-      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/conf/base/extra", "/etc/apache2/sites-available/${DOMAIN_FQDN}.d/"] ],
+      ["<INJECTCONF>"                       , ["base-extra", "${TMP_WORKSPACE_ROOT}/conf/base/extra", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
     ]],
 
     ["Base : Copying SKEL Template" , [
@@ -107,7 +108,7 @@ PROCESS = {
     ]],
 
     ["Apache : Copying Apache Virtualhost Config" , [
-      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/conf/apache/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}.d/"] ],
+      ["<INJECTCONF>"                        , ["apache-extra", "${TMP_WORKSPACE_ROOT}/conf/apache/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
     ]],
 
     ["Apache : Copying SKEL Template" , [
@@ -133,7 +134,7 @@ PROCESS = {
     ]],
 
     ["Django : Copying Apache Virtualhost Config Extras " , [
-      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/conf/django/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}.d/"] ],
+      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}.d/"] ],
     ]],
 
     ["Django : Copying SKEL Template" , [
@@ -369,16 +370,8 @@ class vhostCreator:
                 template_path = os.path.join(self.variables["TMP_WORKSPACE_ROOT"], file_path)
                 self.logger( "Template File [Searching] %s " % template_path )
                 if os.path.exists( template_path ) :
-                  template_file = open( template_path, "r" )
-                  template = template_file.read()
-                  template_file.close()
-
                   self.logger( "Template File [Processing] %s " % template_path )
-                  processed_template = self.process_template( template )
-
-                  template_file = open( template_path, "w" )
-                  template_file.write(processed_template)
-                  template_file.close()
+                  self.process_template_path( template_path )
                 else:
                   self.logger( "Template File [Not Found] \n %s " % template_path )
 
@@ -410,6 +403,14 @@ class vhostCreator:
               # recursively copies the skeleton tree to the target
               if os.path.exists( arg_elms[0]) :
                 self.copytree(arg_elms[0], arg_elms[1])
+
+            elif command[0] == "<INJECTCONF>" :
+              # recursively copies the skeleton tree to the target
+                self.inject_configuration(
+                  self.process_template(arg_elms[0]),  # injection key
+                  self.process_template(arg_elms[1]),  # source path/file
+                  self.process_template(arg_elms[2])   # target file
+                )
 
             else :
               self.execute("%s %s" % (command[0]," ".join([self.process_template(i) for i in arg_elms]) ) )
@@ -499,6 +500,19 @@ class vhostCreator:
     """ logs messages to the console """
     if self.debug :
       print( "%s%s" % (message("[ %s ]" % __APPNAME__)," ".join(msg) ) )
+
+  def process_template_path(self, path ) :
+    if os.path.isdir(path) :
+      for item in os.listdir(path) :
+        self.process_template_path( os.path.join(path,item) )
+    else :
+      template_file = open( path, "r" )
+      template = self.process_template( template_file.read() )
+      template_file.close()
+
+      template_file = open( template_path, "w" )
+      template_file.write(processed_template)
+      template_file.close()
 
   def process_template(self, source) :
     """ Function doc """
@@ -706,6 +720,31 @@ class vhostCreator:
 
     return output
 
+  def inject_configuration(self,key,source,target):
+
+    if os.path.exists(source) && os.path.exists(target)
+      if os.path.isdir(source) :
+        for item in os.listdir(source) :
+          self.inject_configuration(key, os.path.join(source, item), target)
+      else :
+        output = []
+        target_file = open(target, "r")
+        target_lines = target_file.readlines()
+        target_file.close()
+
+        for line in  target_lines :
+          if key in line :
+            source_file = open(source, "r")
+            source_lines = source_file.readlines()
+            source_file.close()
+            for source_line in source_lines :
+              output.append(source_line)
+          else:
+            output.append(line)
+
+        target_file = open(target, "w")
+        target_file.writelines(output)
+        target_file.close()
 
 if __name__ == "__main__" :
 

@@ -24,13 +24,13 @@ try:
   from settings_key import *
 except ImportError:
   from hashlib import sha1
-  from common.lib.generate_key import generate_key
+  from base.lib.generate_key import generate_key
 
   secret_key_file = open( os.path.join(PROJECT_ROOT, "settings_key.py"), "w" )
   secret_key_file.write( generate_key(40, (random_string(),), digester=sha1 ) )
   secret_key_file.close()
 
-  from secret_key import *
+  from settings_key import *
 
 ADMINS = (
     # ('Your Name', 'your_email@example.com'),
@@ -122,7 +122,7 @@ TEMPLATE_LOADERS = (
 )
 TEMPLATE_DIRS = (
   os.path.join(PROJECT_ROOT, "templates"),
-  os.path.join(PROJECT_ROOT, "${DJANGO_MAIN_APPNAME}", "templates")
+  os.path.join(PROJECT_ROOT, "base", "templates"),
 )
 
 MIDDLEWARE_CLASSES = (
