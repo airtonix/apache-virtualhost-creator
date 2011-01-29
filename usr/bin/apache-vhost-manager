@@ -134,7 +134,7 @@ PROCESS = {
     ]],
 
     ["Django : Copying Apache Virtualhost Config Extras " , [
-      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}.d/"] ],
+      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
     ]],
 
     ["Django : Copying SKEL Template" , [
@@ -510,8 +510,8 @@ class vhostCreator:
       template = self.process_template( template_file.read() )
       template_file.close()
 
-      template_file = open( template_path, "w" )
-      template_file.write(processed_template)
+      template_file = open( path, "w" )
+      template_file.write(template)
       template_file.close()
 
   def process_template(self, source) :
@@ -722,7 +722,7 @@ class vhostCreator:
 
   def inject_configuration(self,key,source,target):
 
-    if os.path.exists(source) && os.path.exists(target)
+    if os.path.exists(source) and os.path.exists(target) :
       if os.path.isdir(source) :
         for item in os.listdir(source) :
           self.inject_configuration(key, os.path.join(source, item), target)
