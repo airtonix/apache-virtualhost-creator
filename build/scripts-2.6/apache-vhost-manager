@@ -1,0 +1,918 @@
+#!/usr/bin/python
+__APPNAME__ = "Apache2 Virtual Host Creator"
+__APP_HEADER__ = "creates apache virtual host subdomains for current machine.\nUbuntu 9.10, 10.04"
+
+import sys
+import subprocess
+import re
+import os
+import time
+import pwd
+import getpass
+import shutil
+import tempfile
+import string
+import array
+import struct
+import socket
+import fcntl
+import socket
+import platform
+from optparse import OptionParser
+
+START='\033['
+FINISH='\033[0m'
+
+BOLD='1;'
+
+BLACK="30"
+RED="31"
+GREEN="32"
+YELLOW="33"
+BLUE="34"
+MAGENTA="35"
+CYAN="36"
+GREY="37"
+
+BGBLACK="40"
+BGRED="41"
+BGGREEN="42"
+BGYELLOW="43"
+BGBLUE="44"
+BGMAGENTA="45"
+BGCYAN="46"
+BGGREY="47"
+
+def message(message, level=None):
+  if level == "header" :
+    COLOURS="%s;%sm" % (GREY, BGBLUE)
+  if level == "error" :
+    COLOURS="%s;%sm" % (GREY, BGRED)
+  elif level == "warning" :
+    COLOURS="%s;%sm" % (BLACK,BGYELLOW)
+  elif level == "debug" :
+    COLOURS="%sm" % YELLOW
+  elif level == "result" :
+    COLOURS="%sm" % CYAN
+  elif level == "success" :
+    COLOURS="%sm" % GREEN
+  elif level == "choice" :
+    COLOURS="%sm" % BLUE
+  else :
+    COLOURS="%sm" % GREY
+
+  return "%s%s %s %s" % (START, COLOURS, message, FINISH)
+
+PROCESS = {
+ "create" : {
+
+  "base" : [
+    ["Base : Storing Variables" , [
+        ["<EXPORT>"                           , ["DOMAIN_FQDN",               "${DOMAIN_FQDN}"]],
+        ["<EXPORT>"                           , ["VIRTUALHOST_ROOT",          "/var/www/${DOMAIN_FQDN}/"]],
+        ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_USER"   , "${ADMINUSER}" ] ],
+        ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_GROUP"  , "www-data"] ],
+    ]],
+
+    ["Base : Executing Actions" , [
+      ["<ACTIONS>"                          , ["actions","create","base"] ],
+    ]],
+
+    ["Base : Process Template Files" , [
+      ["<PROCESSTEMPLATEFILE>"              , [
+          "conf/base/main",
+          "conf/base/extra/",
+        ]],
+    ]],
+
+    ["Base : Copying Apache Virtualhost Config" , [
+      ["cp"                                 , ["${TMP_WORKSPACE_ROOT}/conf/base/main", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+      ["<INJECTCONF>"                       , ["base-extra", "${TMP_WORKSPACE_ROOT}/conf/base/extra", "/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+    ]],
+
+    ["Base : Copying SKEL Template" , [
+      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/skel/base/", "${VIRTUALHOST_ROOT}"] ],
+    ]],
+  ],
+
+
+  "apache" : [
+    ["Apache : Executing Actions" , [
+      ["<ACTIONS>"                          , ["actions","create", "apache"] ],
+    ]],
+
+    ["Apache : Process Template Files" , [
+      ["<PROCESSTEMPLATEFILE>"              , [
+          "conf/apache/extra/authentication.conf",
+        ]],
+    ],"self.variables['use_django'] == False"],
+
+    ["Apache : Copying Apache Virtualhost Config" , [
+      ["<INJECTCONF>"                        , ["apache-extra", "${TMP_WORKSPACE_ROOT}/conf/apache/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+    ],"self.variables['use_django'] == False"],
+
+    ["Apache : Copying SKEL Template" , [
+      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/skel/apache/", "${VIRTUALHOST_ROOT}"] ],
+    ]],
+  ],
+
+
+  "django" : [
+    ["Django : Check for dependancies", [
+      ["<CHECKDEP>"                         , [ "python-setuptools", "libapache2-mod-wsgi" ] ]
+    ]],
+
+    ["Django : Executing Actions" , [
+      ["<ACTIONS>"                          , ["actions","create","django-stage-1"] ],
+    ]],
+
+    ["Django : Process Template Files : " , [
+      ["<PROCESSTEMPLATEFILE>"              , [
+          "conf/django/main.conf",
+          "conf/django/static.conf",
+          "skel/django/cgi-bin/django.wsgi",
+          "skel/django/project/settings_custom.py",
+        ]],
+    ]],
+
+    ["Django : Copying Apache Virtualhost Config Extras " , [
+      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/main.conf","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+      ["<INJECTCONF>"                        , ["django-static", "${TMP_WORKSPACE_ROOT}/conf/django/static.conf","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+    ]],
+
+    ["Django : Copying SKEL Template" , [
+      ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/skel/django/", "${VIRTUALHOST_ROOT}"] ],
+    ]],
+
+    ["Django : Executing Actions" , [
+      ["<ACTIONS>"                          , ["actions","create","django-stage-2"] ],
+    ]],
+
+  ],
+
+  "ldap" : [
+  ],
+
+  "dns" : [
+    ["AVAHI : Avahi CNAME Alias", [
+      ["avahi-add-aliases"                  , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
+    ],"self.variables['use_avahi'] == True"],
+
+    ["DNS : Insert CNAME Record", [
+      ["<DNSRECORD>"                        , ["${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+    ],"self.variables['use_dns'] == True"],
+
+    ["DNS : Insert CNAME Record", [
+      ["<DNSRECORD>"                        , ["static.${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+    ],"self.variables['use_dns'] == True and self.variables['use_django'] == True"],
+  ],
+ },
+
+ "remove" : {
+
+    "base"  : [
+      ["Base : Storing Variables" , [
+        ["<EXPORT>"                           , ["DOMAIN_FQDN",               "${DOMAIN_FQDN}"]],
+        ["<EXPORT>"                           , ["VIRTUALHOST_ROOT",          "/var/www/${DOMAIN_FQDN}/"]],
+        ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_USER"   , "${ADMINUSER}" ] ],
+        ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_GROUP"  , "www-data"] ],
+      ]],
+
+      ["Base : Executing Actions" , [
+        ["<ACTIONS>"                          , ["actions","remove","base"] ],
+      ]],
+    ],
+
+    "django" : [
+    ],
+
+    "ldap"  : [
+    ],
+
+    "dns" : [
+      ["AVAHI : Avahi CNAME Alias", [
+        ["avahi-remove-aliases"       , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
+      ],"self.variables['use_avahi'] == True"],
+
+      ["DNS : DNS A Record", [
+        ["<DNSRECORD>"          , ["${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","remove"]],
+      ],"self.variables['use_dns'] == True"],
+
+      ["DNS : Insert CNAME Record", [
+        ["<DNSRECORD>"                        , ["static.${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+      ],"self.variables['use_dns'] == True and self.variables['use_django'] == True"],
+
+    ],
+
+    "apache" : [
+      ["Apache : Executing Actions" , [
+        ["<ACTIONS>"                          , ["actions","remove","apache"] ],
+      ]],
+
+    ],
+
+    }
+}
+class Error(Exception):
+    """Base class for exceptions in this module."""
+    pass
+
+class InputError(Error):
+  """Exception raised for errors in the input.
+
+  Attributes:
+      expr -- input expression in which the error occurred
+      msg  -- explanation of the error
+  """
+
+  def __init__(self, expr, msg):
+    self.expr = expr
+    self.msg = msg
+
+class GeneralError(Error):
+  def __init__(self,value) :
+    self.value = value
+  def __str__(self):
+    return repr(self.value)
+
+class vhostCreator:
+  """ Class doc """
+
+  def __init__ (self):
+    """ Class initialiser """
+    self.required_components = ["base","apache"]
+    self.debug = True
+
+    print ( message(__APPNAME__,"header") )
+    print ( message(__APP_HEADER__,"header") )
+
+  def parse_options(self, args):
+    self.args = args
+    self.testrun = args.testrun
+
+    self.variables = {
+      "MODE" : "create" if not args.remove else "remove",
+    }
+
+    self.conf_path = os.path.join("/","etc","apache-vhost-manager")
+
+
+    self.variables["TMP_WORKSPACE_ROOT"] = tempfile.mkdtemp()
+    tmp = self.variables["TMP_WORKSPACE_ROOT"]
+    self.logger( message("TEMP Workspace %s " % tmp, "header") )
+
+    for item in ["actions", "skel", "conf"] :
+      self.logger( message("Copying %s to TEMP Workspace" % item, "header") )
+      shutil.copytree( os.path.join( self.conf_path, item ), os.path.join( tmp, item ) )
+
+    self.variables["USERNAME"] = os.getenv("USER")
+    self.variables["ADMINUSER"] = args.admin_user
+
+    self.variables["use_avahi"] = args.use_avahi
+
+    self.variables["use_dns"] = args.use_dns
+
+    self.variables["HOSTNAME"] = args.hostname if args.hostname else os.uname()[1]
+    self.variables["DOMAIN"] = args.domain
+    self.variables["SUBDOMAIN_NAME"] = args.subdomain
+    self.variables["DOMAIN_FQDN"] = "%s.%s" % (self.variables["HOSTNAME"], args.domain)
+
+    if args.subdomain :
+      self.variables["DOMAIN_FQDN"] = "%s.%s" % (args.subdomain, self.variables["DOMAIN_FQDN"])
+
+#    self.variables["SERVERIP"] = args.server_ip if args.server_ip else "127.0.0.1"
+
+    self.variables["ADMIN_EMAIL"] = self.process_template(args.admin_email)
+    self.variables["VIRTUALHOST_ROOT"] = None
+
+    self.variables["use_django"] = args.use_django
+    if args.use_django :
+      # TODO : Provide optionparser variables for these bits
+      self.variables["DJANGO_DATABASE_TYPE"] = "sqlite3"
+      self.variables["DJANGO_DATABASE_NAME"] = "os.path.join(SERVER_ROOT, 'db', 'database.sqlite3')"
+      self.variables["DJANGO_DATABASE_HOST"] = ""
+      self.variables["DJANGO_DATABASE_PORT"] = ""
+      self.variables["DJANGO_DATABASE_USERNAME"] = ""
+      self.variables["DJANGO_DATABASE_PASSWORD"] = ""
+
+    if args.ldap_backend == "apache" :
+      self.variables["LDAP_URL"] = self.process_template(args.ldap_url)
+      self.variables["LDAP_BASE"] = self.process_template(args.ldap_base)
+      self.variables["LDAP_ADMIN"] = self.process_template(args.ldap_admin)
+      self.variables["LDAP_ADMIN_PASSWORD"] = args.ldap_admin_password
+
+      self.variables["LDAP_ALLOW_GROUPS"] = self.process_template(args.ldap_allow_groups)
+      self.variables["LDAP_ALLOW_USERS"] = self.process_template(args.ldap_allow_users)
+
+    if args.use_ldap:
+      self.required_components.append("ldap")
+
+      if args.ldap_allow_groups :
+        groups = []
+        for group in self.process_template(args.ldap_allow_groups).split(";") :
+          groups.append(" Require ldap-group %s" % group)
+        self.variables["LDAP_REQUIRE_MODE"] = "\n ".join(groups)
+
+      if args.ldap_allow_users :
+        users = []
+        for user in self.process_template(args.ldap_allow_users).split(";") :
+          groups.append(" Require ldap-user %s" % user)
+        self.variables["LDAP_REQUIRE_MODE"] = "\n ".join(users)
+
+      if not args.ldap_allow_users and not args.ldap_allow_groups :
+        self.variables["LDAP_REQUIRE_MODE"] = "Require valid-user"
+
+    else:
+      self.variables["LDAP_REQUIRE_MODE"]=""
+
+    if args.use_django :
+      self.required_components.append("django")
+
+    if args.use_avahi or args.use_dns :
+      self.required_components.append("dns")
+
+
+  def cleanup(self):
+    if not args.remove :
+      self.logger( message("Cleaning up", "header") )
+      shutil.rmtree( self.variables["TMP_WORKSPACE_ROOT"] )
+
+  def run (self):
+    """ Function doc """
+    ERROR = []
+    try :
+      process = PROCESS[self.variables["MODE"]]
+      for component in self.required_components :
+        self.logger( message("Processing Component : %s" % component, "header") )
+
+        component = process[component]
+        for step in component:
+
+          label = step[0]
+          actions = step[1]
+          condition = True
+
+          if len(step) > 2 :
+            condition = eval(step[2])
+
+          if not condition :
+            continue
+          else:
+            self.logger( message("\t>>> %s " % label, "warning") )
+
+          for command in actions :
+            arg_elms = []
+
+            try :
+              for elm in command[1] :
+                arg_elms.append( self.process_template( elm ) )
+            except:
+              pass
+
+            if command[0] == "<EXPORT>" :
+              self.logger( "Exporting %s " % arg_elms[0] )
+              self.variables[ arg_elms[0] ] = arg_elms[1]
+              os.environ[arg_elms[0]] = arg_elms[1]
+
+            elif command[0] == "<FILEWRITE>" :
+              self.dump_to_file(arg_elms[1], arg_elms[0])
+
+            elif command[0] == "<PROCESSTEMPLATEFILE>" :
+              for file_path in arg_elms :
+                template_path = os.path.join(self.variables["TMP_WORKSPACE_ROOT"], file_path)
+                self.logger( "Template File [Searching] %s " % template_path )
+                if os.path.exists( template_path ) :
+                  self.logger( "Template File [Processing] %s " % template_path )
+                  self.process_template_path( template_path )
+                else:
+                  self.logger( "Template File [Not Found] \n %s " % template_path )
+
+            elif command[0] == "<DNSRECORD>" :
+              self.manage_bind_record(
+                self.process_template(command[1][0]), #mode
+                self.process_template(command[1][1]), #alias
+                self.process_template(command[1][2])  #pointer
+              )
+
+            elif command[0] == "<CHECKDEP>" :
+              self.check_installed_packages( command[1])
+
+            elif command[0] == "<ACTIONS>" :
+              arg_elms.insert(0, self.variables["TMP_WORKSPACE_ROOT"])
+              actions_path = os.sep.join( arg_elms )
+              if os.path.exists( actions_path ) :
+                self.logger( "Executing Actions in %s " % actions_path )
+                self.logger("Processing %s Actions" % len(os.listdir( actions_path )) )
+                for execute_action in os.listdir( actions_path ) :
+                  self.logger( "Searching for Action %s " % execute_action )
+                  action_path = os.path.join(actions_path, execute_action)
+                  if os.path.exists( action_path ) :
+                    self.execute( action_path )
+              else:
+                self.logger( "Action Path [%s] Does not exist" % actions_path )
+
+            elif command[0] == "<MERGETREE>" :
+              # recursively copies the skeleton tree to the target
+              if os.path.exists( arg_elms[0]) :
+                self.copytree(arg_elms[0], arg_elms[1])
+
+            elif command[0] == "<INJECTCONF>" :
+              # recursively copies the skeleton tree to the target
+                self.inject_configuration(
+                  self.process_template(arg_elms[0]),  # injection key
+                  self.process_template(arg_elms[1]),  # source path/file
+                  self.process_template(arg_elms[2])   # target file
+                )
+
+            else :
+              self.execute("%s %s" % (command[0]," ".join([self.process_template(i) for i in arg_elms]) ) )
+
+      self.logger( message("finished %s : %s " % (self.variables["MODE"] , self.variables["DOMAIN_FQDN"])  , "success") )
+
+    except Exception as error:
+      import traceback
+      formatted_lines = traceback.format_exc().splitlines()
+      error_message = []
+      for line in formatted_lines :
+        error_message.append(line)
+        self.logger( message(line  , "error") )
+      ERROR.append( "\n".join(error_message) )
+
+    finally:
+      if not len(ERROR) > 0 :
+        if self.variables["MODE"] == "create" :
+          self.enable_virtualhost()
+          self.restart_services()
+      else :
+        print ERROR
+      self.cleanup()
+  def enable_virtualhost(self):
+    self.popen(["sudo", "a2ensite", self.variables["DOMAIN_FQDN"] ])
+
+  def restart_services(self):
+    self.popen(["sudo", "service", "apache2", "restart"])
+    if self.variables['use_dns'] :
+      self.popen(["sudo", "service", "bind9", "restart"])
+    if self.variables['use_avahi'] :
+      self.popen(["sudo", "service", "avahi-daemon", "restart"])
+
+  def copytree(self, src, dst, symlinks=False, ignore=None):
+    import os
+    from shutil import copy2, copystat, Error
+
+    names = os.listdir(src)
+    if ignore is not None:
+      ignored_names = ignore(src, names)
+    else:
+      ignored_names = set()
+
+    try:
+      os.makedirs(dst)
+    except OSError, exc:
+      # XXX - this is pretty ugly
+      if "file already exists" in exc[1]:  # Windows
+        pass
+      elif "File exists" in exc[1]:        # Linux
+        pass
+      else:
+        raise
+
+    errors = []
+    for name in names:
+      if name in ignored_names:
+        continue
+      srcname = os.path.join(src, name)
+      dstname = os.path.join(dst, name)
+      try:
+        if symlinks and os.path.islink(srcname):
+          linkto = os.readlink(srcname)
+          os.symlink(linkto, dstname)
+        elif os.path.isdir(srcname):
+          self.copytree(srcname, dstname, symlinks, ignore)
+        else:
+          copy2(srcname, dstname)
+        # XXX What about devices, sockets etc.?
+      except (IOError, os.error), why:
+        errors.append((srcname, dstname, str(why)))
+      # catch the Error from the recursive copytree so that we can
+      # continue with other files
+      except Error, err:
+        errors.extend(err.args[0])
+    try:
+      copystat(src, dst)
+    except OSError, why:
+      errors.extend((src, dst, str(why)))
+    if errors:
+      raise Error, errors
+
+  def logger (self,*msg):
+    """ logs messages to the console, prefixed with our application header
+    TODO: provide option to log to console or log file.
+    """
+    if self.debug :
+      print( "%s%s" % (message("[ %s ]" % __APPNAME__)," ".join(msg) ) )
+
+  def process_template_path(self, path ) :
+    if os.path.isdir(path) :
+      for item in os.listdir(path) :
+        self.process_template_path( os.path.join(path,item) )
+    else :
+      template_file = open( path, "r" )
+      template = self.process_template( template_file.read() )
+      template_file.close()
+
+      template_file = open( path, "w" )
+      template_file.write(template)
+      template_file.close()
+
+  def process_template(self, source) :
+    """ Function doc """
+
+    if isinstance(source, str) :
+      output = self._process_template(source)
+
+    else :
+      output = []
+      for item in source :
+        output.append( self._process_template( item ) )
+
+    return output
+
+  def _process_template(self, source) :
+    if re.search('\$\{([a-zA-Z0-9_]+)\}', source)!=None :
+      return string.Template( source ).safe_substitute(self.variables)
+    else :
+      return source
+
+  def ensure_dir(self, path) :
+    """
+      Looks for a folder at provided path, creates it if it does not exist.
+      Returns the folder.
+    """
+    folder = os.path.exists(path)
+    if not folder:
+      if not self.testrun :
+        folder = os.makedirs(path)
+      self.logger("ensuring folder : %s " % path)
+    self.logger( message("folder ensured : %s " % path, "success") )
+    return folder
+
+  def ensure_file (self, path):
+    """
+      Looks for  file at provided path, creates it if it does not exist.
+      Returns the file.
+    """
+    file = os.path.exists(path) and os.path.isfile(path)
+    if not file :
+      # test for parent folder
+      if not os.path.exists(os.path.split(path)[0]) :
+        self.ensure_dir(os.path.split(path)[0])
+      if not self.testrun :
+        file = open(path,"w");
+      self.logger("ensuring file : %s " % path)
+
+    self.logger( message("file ensured : %s " % path,"success") )
+    return file
+
+  def get_ip_address(self,ifname):
+    SIOCGIFADDR = 0x8915
+    SIOCGIFCONF = 0x8912  #define SIOCGIFCONF
+    MAXBYTES = 8096
+    BYTES = 4096          # Simply define the byte size
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try :
+      ip = socket.inet_ntoa(fcntl.ioctl(
+        s.fileno(),
+        SIOCGIFADDR,  #
+        struct.pack('256s', ifname[:15])
+      )[20:24])
+    except :
+      print("Can't sniff %s" % ifname)
+      ip = None
+    return ip
+
+  def get_active_interfaces(self):
+    proc_net_dev = open('/proc/net/dev','r')
+    ifacelist = proc_net_dev.read().split('\n')
+    proc_net_dev.close()
+
+    # remove 2 lines header
+    ifacelist.pop(0)
+    ifacelist.pop(0)
+    output = []
+    # loop to check each line
+    for line in ifacelist:
+      ifacedata = line.replace(' ','').split(':')
+      # check the data have 2 elements
+      if len(ifacedata) == 2:
+        # check the interface is up (Transmit/Receive data)
+        if int(ifacedata[1]) > 0:
+          if ifacedata[0] != "lo" :
+            output.append( ifacedata[0] )
+    return output
+
+  def check_installed_packages(self, search_list):
+    package_list_query = subprocess.Popen(
+      ["dpkg", "--list"],
+      stdout=subprocess.PIPE
+    )
+
+    installed_packages = package_list_query.communicate()[0]
+
+    for package in search_list :
+      if not package in installed_packages :
+        self.logger( message("Installing : %s " % package,"warning") )
+        self.popen(["sudo", "apt-get", "install", package, "-y"])
+      else:
+        self.logger( message("Package : %s is already installed." % package,"success") )
+
+  def popen_pipe(self, cmd, environment_variables={}, pipeline_out=subprocess.PIPE, pipeline_in=None) :
+    self.logger("PopenPipe: %s" % cmd)
+    result = ""
+    if not self.testrun :
+      result = subprocess.Popen(cmd, env=environment_variables, stdout=pipeline_out, stdin=pipeline_in ).communicate()[0]
+    return result
+
+  def popen(self, cmd, current_working_directory=None) :
+    self.logger("Popen : %s" % cmd)
+    if not self.testrun :
+      subprocess.Popen(cmd,cwd=current_working_directory)
+
+  def execute(self, args):
+    self.logger("Executing : %s" % args)
+    if not self.testrun :
+      os.system(args)
+
+  def dump_to_file (self,filepath, contents):
+    """ Function doc """
+    self.logger("Dumping contents to file : %s" % filepath)
+    self.ensure_file(filepath)
+    if not self.testrun :
+      _file = open(filepath,"w")
+      _file.write(contents)
+      _file.close()
+
+  def manage_bind_record(self, alias, hostname, mode="insert"):
+    # open zone file
+    modify = False
+    start_search = False
+    alias_exists = False
+    new_zone_data = []
+    zone_file_path = os.path.join("/", "etc", "bind", "zones", "%s.db" % self.variables["DOMAIN"] )
+    zone_file = open( zone_file_path, "r")
+    zone_data = zone_file.read()
+    zone_file.close()
+
+    cname_record = '{0} {1:>10} {2:>15}'.format(alias, "CNAME", hostname)
+
+    search_marker = ";[==apache-virtual-host-manager aliases==]"
+
+    for line in zone_data.splitlines() :
+      if not start_search and (search_marker in line) :
+        start_search = True
+
+      if start_search :
+        if alias in line :
+          self.logger( message("CNAME DNS found : %s " % cname_record , "warning") )
+          alias_exists = True
+
+      if not alias_exists :
+        new_zone_data.append(line)
+
+    if alias_exists :
+      if "remove" in mode :
+        modify = True
+      if "insert" in mode :
+        modify = False
+    else :
+      if "remove" in mode :
+        modify = False
+      if "insert" in mode :
+        modify = True
+        self.logger( message("Inserting new CNAME DNS record : %s " % cname_record , "success") )
+        new_zone_data.append( cname_record )
+
+    if not self.testrun and modify :
+      new_zone_data = self.increment_serial(new_zone_data)
+      zone_file = open( zone_file_path, "w")
+      zone_file.write( "\n".join(new_zone_data) )
+      zone_file.close()
+
+  def increment_serial(self, zone_data):
+    rawstr = r"""(?P<serial>[\d]+)"""
+    serial_number_regex = re.compile(rawstr)
+    output = []
+    # step through the lines.
+    self.logger( message("Looking for serial number ") )
+
+    for line in zone_data :
+
+      if "serial" in line :
+        serial_match = serial_number_regex.search( line )
+        if serial_match :
+          #increment the serial number
+          self.logger( message("Serial Number found : %s " % line , "success") )
+          serial = int(serial_match.group("serial"))
+          if isinstance(serial, int) :
+            new_serial = serial+1
+            output.append( "{0} {1:<15} ; {2}".format( " "*23, new_serial , "serial number") )
+            self.logger( message("Serial Increment Result : %s > %s" % (serial, serial+1) , "success") )
+          else :
+            output.append(line)
+            self.logger( message("Could not Increment Serial : %s " % line , "warning") )
+      else :
+        output.append(line)
+
+    return output
+
+  def inject_configuration(self,key,source,target):
+
+    if os.path.exists(source) and os.path.exists(target) :
+      self.logger("%s and %s exists" % (source, target) )
+      if os.path.isdir(source) :
+        self.logger("scanning within %s for items to inject" % (source) )
+        for item in os.listdir(source) :
+          self.inject_configuration(key, os.path.join(source, item), target)
+      else :
+        output = []
+        target_file = open(target, "r")
+        target_lines = target_file.readlines()
+        target_file.close()
+
+        self.logger("searching %s for injection key %s" % (target, key) )
+        for target_line in  target_lines :
+          if key in target_line :
+            self.logger("injection key %s found" % (key) )
+            source_file = open(source, "r")
+            source_lines = source_file.readlines()
+            source_file.close()
+            for source_line in source_lines :
+              processed_source_line = self.process_template(source_line)
+              self.logger("processing [ %s ]" % processed_source_line)
+              output.append( processed_source_line )
+          else:
+            output.append(target_line)
+
+        target_file = open(target, "w")
+        target_file.writelines(output)
+        target_file.close()
+
+if __name__ == "__main__" :
+
+    parser = OptionParser()
+
+    ## Removing or Creating the Virtualhost
+    parser.add_option("--remove",
+      dest="remove",
+      action="store_true",
+      default=False,
+      help="remove this virtualhost")
+    ## testrun, no changes made, simply goes through the motions of testing.
+    parser.add_option("--test",
+      dest="testrun",
+      action="store_true",
+      default=False,
+      help="Dry Test Run.")
+
+
+    ######
+    # SERVER NAME RESOLUTION
+    parser.add_option("--subdomain",
+      dest="subdomain",
+      action="store",
+      help="name of the vhost subdomain")
+    parser.add_option("--hostname",
+      dest="hostname",
+      action="store",
+      help="name of the vhost subdomain")
+    parser.add_option("--domain",
+      dest="domain",
+      action="store",
+      help="name of the vhost subdomain")
+#    parser.add_option("--server-ip",
+#      dest="server_ip",
+#      action="store",
+#      help="ip address of the apache server")
+    parser.add_option("--use-avahi",
+      dest="use_avahi",
+      action="store_true",
+      default=False,
+      help="virtualhost will create avahi aliases, otherwise you create your own dns entries")
+    parser.add_option("--use-dns",
+      dest="use_dns",
+      action="store_true",
+      default=False,
+      help="virtualhost will create avahi aliases, otherwise you create your own dns entries")
+
+    ######
+    # ADMIN USER DETAILS
+    parser.add_option("--email",
+      dest="admin_email",
+      action="store",
+      default="${USERNAME}@localhost",
+      help="email address of the site admin")
+    parser.add_option("--admin-user",
+      dest="admin_user",
+      action="store",
+      default="www-data",
+      help="username to chown the site-root with")
+
+    #########
+    ## SERVER_SIDE APPLICATIONS
+    parser.add_option("--use-django",
+      dest="use_django",
+      action="store_true",
+      default=False,
+      help="virtualhost will be a django application")
+
+    ###########
+    # AUTHENTICATION METHODS
+    parser.add_option("--use-ldap",
+      dest="use_ldap",
+      action="store_true",
+      default=False,
+      help="Virtualhost will be a use and ldap server for authentication")
+    parser.add_option("--ldap-backend",
+      dest="ldap_backend",
+      action="store",
+      default="apache",
+      help="LDAP Backend : Currently supports apache or django. defaults to None")
+
+    parser.add_option("--ldap-url",
+      dest="ldap_url",
+      action="store",
+      default="ldap://ldap.${HOSTNAME}.${AVAHI_DOMAIN}:389",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-admin",
+      dest="ldap_admin",
+      action="store",
+      default="cn=admin,dc=${HOSTNAME},dc=${AVAHI_DOMAIN}",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-admin-password",
+      dest="ldap_admin_password",
+      action="store",
+      default="password",
+      help="URI of the ldap authentication server")
+    parser.add_option("--ldap-base",
+      dest="ldap_base",
+      action="store",
+      default="dc=${HOSTNAME},dc=${AVAHI_DOMAIN}",
+      help="Distinguished Name (DN) of the search base to look for Organisational Units, remember that if we are requiring a group that this DN must be above both the user tree and the group tree.")
+    parser.add_option("--ldap-allow-groups",
+      dest="ldap_allow_groups",
+      action="store",
+      default="",
+      help="semicolon separated Distinguished Name (DN) of the groups allowed to access this resource"),
+    parser.add_option("--ldap-allow-users",
+      dest="ldap_allow_users",
+      action="store",
+      default="",
+      help="semicolon separated UIDs of users allowed to access this resource")
+
+    (options,args) = parser.parse_args()
+
+    arg_error = False
+
+
+    virtualhost_manager = vhostCreator()
+
+    if not options.remove :
+      if options.admin_email == None :
+        error_message = "Need an email address"
+        arg_error = True
+
+      if options.subdomain == None :
+        error_message = "Need an subdomain name"
+        arg_error = True
+
+      if options.hostname == None :
+        options.hostname = os.uname()[1]
+
+      if options.domain == None and options.use_dns :
+        error_message = "Need an domain name if you want to create a DNS record"
+        arg_error = True
+
+#      if options.server_ip == None and options.use_dns :
+#        error_message = "Need the IP address of the webserver for the DNS record."
+#        error_message += "\nTODO : Create menu prompter"
+#        raise BaseException, error_message
+#        interfaces = virtualhost_manager.get_active_interfaces()
+#        if len(interfaces) > 0 :
+#          menu = {}
+#          for item in interfaces :
+#            menu[item] = virtualhost_manager.get_ip_address(item)
+#          options.server_ip = virtualhost_manager.menu(menu, "Please choose one of the following")
+#        else :
+#          error_message += "\n Could not find any active interfaces."
+
+#        arg_error = True
+
+    if arg_error == True :
+      parser.print_help()
+      virtualhost_manager.logger( message( error_message,"error") )
+      exit(-1)
+    else :
+      virtualhost_manager.parse_options(options)
+      virtualhost_manager.run()
+

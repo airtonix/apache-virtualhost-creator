@@ -1,6 +1,11 @@
 from django.conf.urls.defaults import *
+from django.contrib import admin
+
+admin.autodiscover()
 
 urlpatterns = patterns('',
-    url(r'^/$', 'dashboard', name='common-dashboard'),
+    (r'^/', include('project.base.urls')),
+    (r'^admin/doc/', include('django.contrib.admindocs.urls')),
+    (r'^admin/', include(admin.site.urls)),
 )
 

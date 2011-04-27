@@ -2,6 +2,7 @@
 __APPNAME__ = "Apache2 Virtual Host Creator"
 __APP_HEADER__ = "creates apache virtual host subdomains for current machine.\nUbuntu 9.10, 10.04"
 
+
 import sys
 import subprocess
 import re
@@ -69,7 +70,7 @@ PROCESS = {
   "base" : [
     ["Base : Storing Variables" , [
         ["<EXPORT>"                           , ["DOMAIN_FQDN",               "${DOMAIN_FQDN}"]],
-        ["<EXPORT>"                           , ["VIRTUALHOST_ROOT",          "/var/www/${DOMAIN_FQDN}/"]],
+        ["<EXPORT>"                           , ["VIRTUALHOST_ROOT",          "/var/www/${DOMAIN_FQDN}"]],
         ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_USER"   , "${ADMINUSER}" ] ],
         ["<EXPORT>"                           , ["VIRTUALHOST_OWNER_GROUP"  , "www-data"] ],
     ]],
@@ -105,11 +106,11 @@ PROCESS = {
       ["<PROCESSTEMPLATEFILE>"              , [
           "conf/apache/extra/authentication.conf",
         ]],
-    ]],
+    ],"self.variables['use_django'] == False"],
 
     ["Apache : Copying Apache Virtualhost Config" , [
       ["<INJECTCONF>"                        , ["apache-extra", "${TMP_WORKSPACE_ROOT}/conf/apache/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
-    ]],
+    ],"self.variables['use_django'] == False"],
 
     ["Apache : Copying SKEL Template" , [
       ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/skel/apache/", "${VIRTUALHOST_ROOT}"] ],
@@ -121,39 +122,50 @@ PROCESS = {
     ["Django : Check for dependancies", [
       ["<CHECKDEP>"                         , [ "python-setuptools", "libapache2-mod-wsgi" ] ]
     ]],
+
     ["Django : Executing Actions" , [
-      ["<ACTIONS>"                          , ["actions","create","django"] ],
+      ["<ACTIONS>"                          , ["actions","create","django-stage-1"] ],
     ]],
 
     ["Django : Process Template Files : " , [
       ["<PROCESSTEMPLATEFILE>"              , [
-          "conf/django/extra/django.conf",
+          "conf/django/main.conf",
+          "conf/django/static.conf",
           "skel/django/cgi-bin/django.wsgi",
           "skel/django/project/settings_custom.py",
         ]],
     ]],
 
     ["Django : Copying Apache Virtualhost Config Extras " , [
-      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/extra","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+      ["<INJECTCONF>"                        , ["django-extra", "${TMP_WORKSPACE_ROOT}/conf/django/main.conf","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
+      ["<INJECTCONF>"                        , ["django-static", "${TMP_WORKSPACE_ROOT}/conf/django/static.conf","/etc/apache2/sites-available/${DOMAIN_FQDN}"] ],
     ]],
 
     ["Django : Copying SKEL Template" , [
       ["<MERGETREE>"                        , ["${TMP_WORKSPACE_ROOT}/skel/django/", "${VIRTUALHOST_ROOT}"] ],
     ]],
+
+    ["Django : Executing Actions" , [
+      ["<ACTIONS>"                          , ["actions","create","django-stage-2"] ],
+    ]],
+
   ],
 
   "ldap" : [
   ],
-  "dns" : [
 
+  "dns" : [
     ["AVAHI : Avahi CNAME Alias", [
       ["avahi-add-aliases"                  , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
-    ],"self.variables['usesAvahi'] == True"],
+    ],"self.variables['use_avahi'] == True"],
 
     ["DNS : Insert CNAME Record", [
-      ["<DNSRECORD>"                  , ["${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
-    ],"self.variables['usesDNS'] == True"],
+      ["<DNSRECORD>"                        , ["${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+    ],"self.variables['use_dns'] == True"],
 
+    ["DNS : Insert CNAME Record", [
+      ["<DNSRECORD>"                        , ["static.${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+    ],"self.variables['use_dns'] == True and self.variables['use_django'] == True"],
   ],
  },
 
@@ -181,11 +193,16 @@ PROCESS = {
     "dns" : [
       ["AVAHI : Avahi CNAME Alias", [
         ["avahi-remove-aliases"       , ["${SUBDOMAIN_NAME}.${HOSTNAME}.${DOMAIN}"]],
-      ],"self.variables['usesAvahi'] == True"],
+      ],"self.variables['use_avahi'] == True"],
 
       ["DNS : DNS A Record", [
         ["<DNSRECORD>"          , ["${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","remove"]],
-      ],"self.variables['usesDNS'] == True"],
+      ],"self.variables['use_dns'] == True"],
+
+      ["DNS : Insert CNAME Record", [
+        ["<DNSRECORD>"                        , ["static.${SUBDOMAIN_NAME}.${HOSTNAME}", "${HOSTNAME}","insert"]],
+      ],"self.variables['use_dns'] == True and self.variables['use_django'] == True"],
+
     ],
 
     "apache" : [
@@ -231,13 +248,14 @@ class vhostCreator:
     print ( message(__APP_HEADER__,"header") )
 
   def parse_options(self, args):
-    self.testrun = args.isTestRun
+    self.args = args
+    self.testrun = args.testrun
 
     self.variables = {
       "MODE" : "create" if not args.remove else "remove",
     }
 
-    self.conf_path = os.path.join("..","..","etc","apache-vhost-manager")
+    self.conf_path = os.path.join("/","etc","apache-vhost-manager")
 
 
     self.variables["TMP_WORKSPACE_ROOT"] = tempfile.mkdtemp()
@@ -251,9 +269,9 @@ class vhostCreator:
     self.variables["USERNAME"] = os.getenv("USER")
     self.variables["ADMINUSER"] = args.admin_user
 
-    self.variables["usesAvahi"] = args.usesAvahi
+    self.variables["use_avahi"] = args.use_avahi
 
-    self.variables["usesDNS"] = args.usesDNS
+    self.variables["use_dns"] = args.use_dns
 
     self.variables["HOSTNAME"] = args.hostname if args.hostname else os.uname()[1]
     self.variables["DOMAIN"] = args.domain
@@ -263,18 +281,13 @@ class vhostCreator:
     if args.subdomain :
       self.variables["DOMAIN_FQDN"] = "%s.%s" % (args.subdomain, self.variables["DOMAIN_FQDN"])
 
-    self.variables["SERVERIP"] = args.server_ip if args.server_ip else "127.0.0.1"
+#    self.variables["SERVERIP"] = args.server_ip if args.server_ip else "127.0.0.1"
 
     self.variables["ADMIN_EMAIL"] = self.process_template(args.admin_email)
     self.variables["VIRTUALHOST_ROOT"] = None
 
-    if args.isDjango :
-      django = {}
-      django["HANDLES_LDAP"] = args.djangoHandlesLDAP
-      django["CONFIG"] = ""
-      django["CGI"] = ""
-
-      self.variables["django"] = django
+    self.variables["use_django"] = args.use_django
+    if args.use_django :
       # TODO : Provide optionparser variables for these bits
       self.variables["DJANGO_DATABASE_TYPE"] = "sqlite3"
       self.variables["DJANGO_DATABASE_NAME"] = "os.path.join(SERVER_ROOT, 'db', 'database.sqlite3')"
@@ -283,16 +296,16 @@ class vhostCreator:
       self.variables["DJANGO_DATABASE_USERNAME"] = ""
       self.variables["DJANGO_DATABASE_PASSWORD"] = ""
 
-    self.variables["isLdap"] = args.isLdap
-    self.variables["LDAP_URL"] = self.process_template(args.ldap_url)
-    self.variables["LDAP_BASE"] = self.process_template(args.ldap_base)
-    self.variables["LDAP_ADMIN"] = self.process_template(args.ldap_admin)
-    self.variables["LDAP_ADMIN_PASSWORD"] = args.ldap_admin_password
+    if args.ldap_backend == "apache" :
+      self.variables["LDAP_URL"] = self.process_template(args.ldap_url)
+      self.variables["LDAP_BASE"] = self.process_template(args.ldap_base)
+      self.variables["LDAP_ADMIN"] = self.process_template(args.ldap_admin)
+      self.variables["LDAP_ADMIN_PASSWORD"] = args.ldap_admin_password
 
-    self.variables["LDAP_ALLOW_GROUPS"] = self.process_template(args.ldap_allow_groups)
-    self.variables["LDAP_ALLOW_USERS"] = self.process_template(args.ldap_allow_users)
+      self.variables["LDAP_ALLOW_GROUPS"] = self.process_template(args.ldap_allow_groups)
+      self.variables["LDAP_ALLOW_USERS"] = self.process_template(args.ldap_allow_users)
 
-    if args.isLdap:
+    if args.use_ldap:
       self.required_components.append("ldap")
 
       if args.ldap_allow_groups :
@@ -313,10 +326,10 @@ class vhostCreator:
     else:
       self.variables["LDAP_REQUIRE_MODE"]=""
 
-    if args.isDjango :
+    if args.use_django :
       self.required_components.append("django")
 
-    if args.usesAvahi or args.usesDNS :
+    if args.use_avahi or args.use_dns :
       self.required_components.append("dns")
 
 
@@ -439,9 +452,9 @@ class vhostCreator:
 
   def restart_services(self):
     self.popen(["sudo", "service", "apache2", "restart"])
-    if self.variables['usesDNS'] :
+    if self.variables['use_dns'] :
       self.popen(["sudo", "service", "bind9", "restart"])
-    if self.variables['usesAvahi'] :
+    if self.variables['use_avahi'] :
       self.popen(["sudo", "service", "avahi-daemon", "restart"])
 
   def copytree(self, src, dst, symlinks=False, ignore=None):
@@ -488,16 +501,15 @@ class vhostCreator:
         errors.extend(err.args[0])
     try:
       copystat(src, dst)
-    except WindowsError:
-      # can't copy file access times on Windows
-      pass
     except OSError, why:
       errors.extend((src, dst, str(why)))
     if errors:
       raise Error, errors
 
   def logger (self,*msg):
-    """ logs messages to the console """
+    """ logs messages to the console, prefixed with our application header
+    TODO: provide option to log to console or log file.
+    """
     if self.debug :
       print( "%s%s" % (message("[ %s ]" % __APPNAME__)," ".join(msg) ) )
 
@@ -608,11 +620,6 @@ class vhostCreator:
     )
 
     installed_packages = package_list_query.communicate()[0]
-#    installed_packages = self.popen_pipe(
-#      ["awk", "'/^ii/{print $2}'"],
-#      pipeline_in = package_list_raw.stdout,
-#      pipeline_out = subprocess.PIPE
-#    )
 
     for package in search_list :
       if not package in installed_packages :
@@ -687,7 +694,7 @@ class vhostCreator:
         self.logger( message("Inserting new CNAME DNS record : %s " % cname_record , "success") )
         new_zone_data.append( cname_record )
 
-    if modify :
+    if not self.testrun and modify :
       new_zone_data = self.increment_serial(new_zone_data)
       zone_file = open( zone_file_path, "w")
       zone_file.write( "\n".join(new_zone_data) )
@@ -723,7 +730,9 @@ class vhostCreator:
   def inject_configuration(self,key,source,target):
 
     if os.path.exists(source) and os.path.exists(target) :
+      self.logger("%s and %s exists" % (source, target) )
       if os.path.isdir(source) :
+        self.logger("scanning within %s for items to inject" % (source) )
         for item in os.listdir(source) :
           self.inject_configuration(key, os.path.join(source, item), target)
       else :
@@ -732,15 +741,19 @@ class vhostCreator:
         target_lines = target_file.readlines()
         target_file.close()
 
-        for line in  target_lines :
-          if key in line :
+        self.logger("searching %s for injection key %s" % (target, key) )
+        for target_line in  target_lines :
+          if key in target_line :
+            self.logger("injection key %s found" % (key) )
             source_file = open(source, "r")
             source_lines = source_file.readlines()
             source_file.close()
             for source_line in source_lines :
-              output.append(source_line)
+              processed_source_line = self.process_template(source_line)
+              self.logger("processing [ %s ]" % processed_source_line)
+              output.append( processed_source_line )
           else:
-            output.append(line)
+            output.append(target_line)
 
         target_file = open(target, "w")
         target_file.writelines(output)
@@ -750,20 +763,22 @@ if __name__ == "__main__" :
 
     parser = OptionParser()
 
-
+    ## Removing or Creating the Virtualhost
     parser.add_option("--remove",
       dest="remove",
       action="store_true",
       default=False,
       help="remove this virtualhost")
-
+    ## testrun, no changes made, simply goes through the motions of testing.
     parser.add_option("--test",
-      dest="isTestRun",
+      dest="testrun",
       action="store_true",
       default=False,
       help="Dry Test Run.")
 
 
+    ######
+    # SERVER NAME RESOLUTION
     parser.add_option("--subdomain",
       dest="subdomain",
       action="store",
@@ -776,23 +791,23 @@ if __name__ == "__main__" :
       dest="domain",
       action="store",
       help="name of the vhost subdomain")
-
-    parser.add_option("--server-ip",
-      dest="server_ip",
-      action="store",
-      help="ip address of the apache server")
+#    parser.add_option("--server-ip",
+#      dest="server_ip",
+#      action="store",
+#      help="ip address of the apache server")
     parser.add_option("--use-avahi",
-      dest="usesAvahi",
+      dest="use_avahi",
       action="store_true",
       default=False,
       help="virtualhost will create avahi aliases, otherwise you create your own dns entries")
     parser.add_option("--use-dns",
-      dest="usesDNS",
+      dest="use_dns",
       action="store_true",
       default=False,
       help="virtualhost will create avahi aliases, otherwise you create your own dns entries")
 
-
+    ######
+    # ADMIN USER DETAILS
     parser.add_option("--email",
       dest="admin_email",
       action="store",
@@ -804,11 +819,27 @@ if __name__ == "__main__" :
       default="www-data",
       help="username to chown the site-root with")
 
-    parser.add_option("--ldap",
-      dest="isLdap",
+    #########
+    ## SERVER_SIDE APPLICATIONS
+    parser.add_option("--use-django",
+      dest="use_django",
+      action="store_true",
+      default=False,
+      help="virtualhost will be a django application")
+
+    ###########
+    # AUTHENTICATION METHODS
+    parser.add_option("--use-ldap",
+      dest="use_ldap",
       action="store_true",
       default=False,
       help="Virtualhost will be a use and ldap server for authentication")
+    parser.add_option("--ldap-backend",
+      dest="ldap_backend",
+      action="store",
+      default="apache",
+      help="LDAP Backend : Currently supports apache or django. defaults to None")
+
     parser.add_option("--ldap-url",
       dest="ldap_url",
       action="store",
@@ -840,23 +871,6 @@ if __name__ == "__main__" :
       default="",
       help="semicolon separated UIDs of users allowed to access this resource")
 
-    parser.add_option("--django",
-      dest="isDjango",
-      action="store_true",
-      default=False,
-      help="virtualhost will be a django application")
-    parser.add_option("--django-ldap",
-      dest="djangoHandlesLDAP",
-      action="store_true",
-      default=False,
-      help="Ldap Authentication will be handled by the django backend instead of apache.")
-    parser.add_option("--django-main-app",
-      dest="djangoMainAppName",
-      action="store",
-      default="site_portal",
-      help="Allows you to define the name of the main (or first) Django Application.")
-
-
     (options,args) = parser.parse_args()
 
     arg_error = False
@@ -876,22 +890,24 @@ if __name__ == "__main__" :
       if options.hostname == None :
         options.hostname = os.uname()[1]
 
-      if options.domain == None and options.usesDNS :
+      if options.domain == None and options.use_dns :
         error_message = "Need an domain name if you want to create a DNS record"
         arg_error = True
 
-      if options.server_ip == None and options.usesDNS :
-        error_message = "Need the IP address of the webserver for the DNS record."
-        interfaces = virtualhost_manager.get_active_interfaces()
-        if len(interfaces) > 0 :
-          menu = {}
-          for item in interfaces :
-            menu[item] = virtualhost_manager.get_ip_address(item)
-          options.server_ip = virtualhost_manager.menu(menu, "Please choose one of the following")
-        else :
-          error_message += "\n Could not find any active interfaces."
+#      if options.server_ip == None and options.use_dns :
+#        error_message = "Need the IP address of the webserver for the DNS record."
+#        error_message += "\nTODO : Create menu prompter"
+#        raise BaseException, error_message
+#        interfaces = virtualhost_manager.get_active_interfaces()
+#        if len(interfaces) > 0 :
+#          menu = {}
+#          for item in interfaces :
+#            menu[item] = virtualhost_manager.get_ip_address(item)
+#          options.server_ip = virtualhost_manager.menu(menu, "Please choose one of the following")
+#        else :
+#          error_message += "\n Could not find any active interfaces."
 
-        arg_error = True
+#        arg_error = True
 
     if arg_error == True :
       parser.print_help()
